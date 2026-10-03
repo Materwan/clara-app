@@ -8,7 +8,7 @@ from PySide6.QtTest import QTest
 
 from clara_app.api import ClaraApi
 from clara_app.chat_view import CLARA, ERROR, NOTE, USER
-from clara_app.chat_window import ChatWindow, literal
+from clara_app.chat_window import GREETING, ChatWindow, literal
 from clara_app.config import Config
 
 
@@ -115,27 +115,20 @@ def test_without_settings_the_window_asks_for_them(qt):
     window.quit_for_good()
 
 
-def test_new_chat_forgets_the_thread_on_the_server_and_clears_the_view(qt, config, server):
+def test_new_chat_clears_the_view_and_keeps_the_conversation_on_the_server(qt, config, server):
     _, state = server
     window = make_window(qt, config)
     window.send("hello")
     wait_until(lambda: not window.busy)
+    first = window.conversation
+    assert first.startswith("app:tester:") and state.chat_bodies[0]["conversation"] == first
     window.new_chat()
-    wait_until(lambda: state.deleted)
-    wait_until(lambda: window.new_chat_button.isEnabled())
-    assert state.deleted == ["/v1/conversations/app:tester"]
-    assert texts(window, USER) == [] and texts(window, CLARA) == []
-    assert "New conversation" in texts(window, NOTE)[0]
-    window.quit_for_good()
-
-
-def test_new_chat_keeps_the_view_if_the_server_refuses(qt, config):
-    window = make_window(qt, config)
-    window.view.add(USER, "keep me")
-    config.token = "nope"
-    window.new_chat()
-    wait_until(lambda: texts(window, ERROR))
-    assert "401" in texts(window, ERROR)[0] and texts(window, USER) == ["keep me"]
+    assert window.conversation is None and state.deleted == []
+    assert texts(window, USER) == [] and texts(window, CLARA) == [] and texts(window, NOTE) == [GREETING]
+    window.send("another")
+    wait_until(lambda: not window.busy)
+    assert window.conversation not in (None, first)
+    assert state.chat_bodies[1]["conversation"] == window.conversation
     window.quit_for_good()
 
 

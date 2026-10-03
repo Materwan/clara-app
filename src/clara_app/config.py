@@ -33,10 +33,6 @@ class Config:
         """Enough to talk to a server."""
         return bool(self.url.strip() and self.token.strip() and self.user_id.strip())
 
-    @property
-    def conversation(self) -> str:
-        return f"app:{self.user_id}"
-
 
 def default_user() -> str:
     try:

@@ -8,7 +8,9 @@ from __future__ import annotations
 import functools
 import json
 import ssl
+import uuid
 from typing import Iterator
+from urllib.parse import quote
 
 import httpx
 
@@ -20,8 +22,19 @@ REMINDER_READ_TIMEOUT = 60.0  # the server sends a keepalive every 15 s
 
 INSTRUCTIONS = (
     "You are talking through Clara's desktop app, a small chat window. "
-    "Markdown is displayed, but keep answers short and conversational."
+    "Markdown is displayed, but keep answers short and conversational. "
+    "The user can attach files (PDF, code, Markdown, text): their content comes in the message, each inside "
+    '<document name="..." type="..."> tags. Refer to them by name.'
 )
+
+
+def new_conversation(user_id: str) -> str:
+    """The id of a new conversation of this user: the server lists it from its first message on."""
+    return f"{SURFACE}:{user_id}:{uuid.uuid4().hex[:12]}"
+
+
+def _path(conversation: str) -> str:
+    return "/v1/conversations/" + quote(conversation, safe=":")
 
 
 class ApiError(Exception):
@@ -126,21 +139,49 @@ class ClaraApi:
         self._call("GET", "/v1/memory/facts", accept=(404,), params=self._identity())
         return info
 
-    def chat(self, message: str) -> EventStream:
-        """Events of one turn: `token`, `usage`, `done`, `error`..."""
+    def chat(self, message: str, conversation: str) -> EventStream:
+        """Events of one turn of `conversation`: `token`, `usage`, `done`, `error`..."""
         body = {
             **self._identity(),
             "user_name": self.config.user_name or None,
             "message": message,
-            "conversation": self.config.conversation,
+            "conversation": conversation,
             "instructions": INSTRUCTIONS,
         }
         return self._open("POST", "/v1/chat/stream", CHAT_READ_TIMEOUT, json=body)
 
-    def new_thread(self) -> None:
-        """Forget this conversation (the facts Clara knows are kept)."""
-        self._call("DELETE", f"/v1/conversations/{self.config.conversation}")
+    # -- the conversations ------------------------------------------------------------ #
+
+    def conversations(self, query: str = "") -> list[dict]:
+        """This user's conversations in the app, pinned first, then the last written in: `id`, `title`,
+        `pinned`, `updated_at`, `preview`... `query` keeps those whose title or messages contain it."""
+        params = {**self._identity(), **({"q": query.strip()} if query.strip() else {})}
+        return self._call("GET", "/v1/conversations", params=params).json()["conversations"]
+
+    def messages(self, conversation: str) -> dict:
+        """A conversation to show again: its last `messages` (`role`, `content`), the `summary` of older ones
+        that are no longer kept, and whether some are left out (`earlier`)."""
+        return self._call("GET", _path(conversation) + "/messages", params=self._identity()).json()
+
+    def title(self, conversation: str) -> str:
+        """Clara's title for the conversation, written now if it has none yet."""
+        return self._call("POST", _path(conversation) + "/title", json=self._identity()).json()["title"]
+
+    def update_conversation(self, conversation: str, title: str | None = None, pinned: bool | None = None) -> dict:
+        """Rename (an empty title: none) and/or pin a conversation."""
+        body = {**self._identity(), "title": title, "pinned": pinned}
+        return self._call("PATCH", _path(conversation), json=body).json()
+
+    def delete_conversation(self, conversation: str) -> None:
+        """Erase a conversation from the server (the facts Clara knows are kept)."""
+        self._call("DELETE", _path(conversation), params=self._identity())
 
     def reminders(self) -> EventStream:
-        """Reminders as they come due, and the ones missed since this client last connected."""
-        return self._open("GET", "/v1/reminders/stream", REMINDER_READ_TIMEOUT)
+        """This user's reminders as they come due and notifications as they are sent, the ones missed since
+        this client last connected first, and what the server is doing."""
+        return self._open("GET", "/v1/notifications/stream", REMINDER_READ_TIMEOUT, params=self._identity())
+
+    def notify(self, text: str, title: str = "", targets: list[str] | None = None) -> dict:
+        """Send this user a notification, on the surfaces in `targets` (empty: on all of theirs)."""
+        body = {**self._identity(), "text": text, "title": title, "targets": targets or []}
+        return self._call("POST", "/v1/notifications", json=body).json()

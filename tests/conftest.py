@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlsplit
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,6 +26,14 @@ def qt():
     app = QApplication.instance() or QApplication([])
     app.setQuitOnLastWindowClosed(False)
     return app
+
+
+@pytest.fixture(autouse=True)
+def collect_garbage():
+    """Free the windows of a test here, on the Qt thread. Left to the garbage collector, a window in a reference
+    cycle could be freed at any moment, maybe on a worker thread, which Qt does not allow (it aborts)."""
+    yield
+    gc.collect()
 
 
 def wait_until(condition, timeout: float = 5.0) -> None:
@@ -49,6 +60,43 @@ class State:
         # a "stopped" ends that connection, as it does on the real server
         self.server_scripts: list[list[str]] = []
         self.model = "fake-model"
+        self.stream_paths: list[str] = []  # the event stream as asked for, with its query
+        self.notifications: list[dict] = []  # bodies of POST /v1/notifications
+        # the conversations, as the server lists them (`id`, `title`, `pinned`, `updated_at`, `preview`)
+        self.conversations: dict[str, dict] = {}
+        self.messages: dict[str, list[dict]] = {}  # of each conversation: `role`, `content`
+        self.summaries: dict[str, str] = {}
+        self.title = "Clara's title"  # what Clara titles a conversation (None: the model fails)
+        self.title_requests: list[str] = []
+        self.patches: list[tuple[str, dict]] = []
+        self.list_requests: list[dict] = []  # the query of each GET /v1/conversations
+        self.hold_messages = threading.Event()  # set: GET .../messages waits until it is cleared
+
+    def add_conversation(self, conversation: str, *exchanges: tuple[str, str], title: str = "",
+                         updated_at: str = "", pinned: bool = False) -> None:
+        self.conversations[conversation] = {
+            "id": conversation, "title": title, "titled_by": "clara" if title else "", "pinned": pinned,
+            "created_at": updated_at or now(), "updated_at": updated_at or now(),
+            "preview": exchanges[0][0][:300] if exchanges else "",
+        }
+        self.messages[conversation] = [
+            {"role": role, "content": content} for question, answer in exchanges
+            for role, content in (("user", question), ("assistant", answer))
+        ]
+
+    def listed(self, query: str = "") -> list[dict]:
+        found = [
+            info for info in self.conversations.values()
+            if not query or query.lower() in info["title"].lower()
+            or any(query.lower() in m["content"].lower() for m in self.messages.get(info["id"], []))
+        ]
+        found.sort(key=lambda info: info["updated_at"], reverse=True)
+        found.sort(key=lambda info: not info["pinned"])
+        return found
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -80,6 +128,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
 
+    def conversation_route(self) -> tuple[str, str, dict]:
+        """`(conversation, what follows it, query)` of a /v1/conversations/... path."""
+        parts = urlsplit(self.path)
+        rest = unquote(parts.path[len("/v1/conversations/"):])
+        for suffix in ("/messages", "/title"):
+            if rest.endswith(suffix):
+                return rest[: -len(suffix)], suffix, parse_qs(parts.query)
+        return rest, "", parse_qs(parts.query)
+
     def do_GET(self):
         if self.path == "/health":
             return self.reply(200, {"status": "ok", "provider": "local", "model": self.state.model})
@@ -87,8 +144,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/v1/memory/facts"):
             return self.reply(404, {"detail": "Nobody known as app:tester"})
-        if self.path == "/v1/reminders/stream":
+        if self.path.split("?")[0] == "/v1/conversations":
+            query = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
+            self.state.list_requests.append(query)
+            return self.reply(200, {"conversations": self.state.listed(query.get("q", ""))})
+        if self.path.startswith("/v1/conversations/"):
+            conversation, suffix, _ = self.conversation_route()
+            while self.state.hold_messages.is_set():
+                time.sleep(0.01)
+            if suffix != "/messages" or conversation not in self.state.conversations:
+                return self.reply(404, {"detail": "No such conversation of yours"})
+            return self.reply(200, {
+                **self.state.conversations[conversation],
+                "summary": self.state.summaries.get(conversation, ""),
+                "earlier": False,
+                "messages": self.state.messages[conversation],
+            })
+        if self.path.split("?")[0] in ("/v1/reminders/stream", "/v1/notifications/stream"):
             self.state.reminder_connections += 1
+            self.state.stream_paths.append(self.path)
             self.stream_headers()
             self.wfile.write(b": keepalive\n\n")
             for reminder in self.state.reminders:
@@ -111,13 +185,45 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if self.authorised():
             self.state.deleted.append(self.path)
-            self.reply(200, {"deleted_messages": 2})
+            conversation, _, _ = self.conversation_route()
+            self.state.conversations.pop(conversation, None)
+            self.reply(200, {"deleted_messages": len(self.state.messages.pop(conversation, []))})
+
+    def do_PATCH(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        if not self.authorised():
+            return
+        conversation, _, _ = self.conversation_route()
+        info = self.state.conversations.get(conversation)
+        if info is None:
+            return self.reply(404, {"detail": "No such conversation of yours"})
+        self.state.patches.append((conversation, body))
+        if body.get("title") is not None:
+            info["title"], info["titled_by"] = body["title"], "person" if body["title"] else ""
+        if body.get("pinned") is not None:
+            info["pinned"] = body["pinned"]
+        self.reply(200, info)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         if not self.authorised():
             return
+        if self.path == "/v1/notifications":
+            self.state.notifications.append(body)
+            return self.reply(201, {"id": len(self.state.notifications), "targets": body.get("targets", [])})
+        if self.path.startswith("/v1/conversations/"):
+            conversation, _, _ = self.conversation_route()
+            self.state.title_requests.append(conversation)
+            info = self.state.conversations.get(conversation)
+            if info is None:
+                return self.reply(404, {"detail": "No such conversation of yours"})
+            if self.state.title is None:
+                return self.reply(502, {"detail": "The language model failed"})
+            if not info["title"]:
+                info["title"], info["titled_by"] = self.state.title, "clara"
+            return self.reply(200, {"id": conversation, "title": info["title"]})
         if self.path != "/v1/chat/stream":
             return self.reply(404, {"detail": "no such route"})
         self.state.chat_bodies.append(body)
@@ -133,6 +239,15 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(0.01)
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
+            conversation = body.get("conversation") or ""
+            if conversation not in self.state.conversations:
+                self.state.add_conversation(conversation)
+                self.state.conversations[conversation]["preview"] = body["message"][:300]
+            self.state.conversations[conversation]["updated_at"] = now()
+            self.state.messages[conversation] += [
+                {"role": "user", "content": body["message"]},
+                {"role": "assistant", "content": "".join(self.state.reply)},
+            ]
             self.event({"type": "done", "reply": "".join(self.state.reply), "usage": {}})
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass

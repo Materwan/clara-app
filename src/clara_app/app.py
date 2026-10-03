@@ -1,4 +1,5 @@
-"""The application: the tray icon, the window, and the reminder listener, wired together."""
+"""The application: the tray icon, the window, and the listener of reminders and notifications, wired
+together."""
 
 from __future__ import annotations
 
@@ -23,17 +24,26 @@ LATE_SECONDS = 120  # a reminder shown this long after it fired is announced as 
 
 def describe_reminder(event: dict, now: datetime | None = None) -> tuple[str, str, str]:
     """`(title, text, detail)` of a reminder event, for a notification. The text is what Clara wrote for it
-    (the reminder's own text if she could not)."""
+    (the reminder's own text if she could not). A reminder is always the user's own."""
     now = now or datetime.now(timezone.utc)
     missed = (now - datetime.fromisoformat(event["fired_at"])).total_seconds() > LATE_SECONDS
     title = f"{APP_NAME} reminder" + (" (missed)" if missed else "")
-    details = []
+    detail = ""
     if missed:
         due = datetime.fromisoformat(event["due_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
-        details.append(f"It was due {due}.")
-    if event.get("from"):
-        details.append(f"Set by {event['from']}.")
-    return title, str(event.get("message") or event["text"]), " ".join(details)
+        detail = f"It was due {due}."
+    return title, str(event.get("message") or event["text"]), detail
+
+
+def describe_notification(event: dict, now: datetime | None = None) -> tuple[str, str, str]:
+    """`(title, text, detail)` of a notification event (from Clara, the server, or another client)."""
+    now = now or datetime.now(timezone.utc)
+    title = event.get("title") or APP_NAME
+    detail = ""
+    if (now - datetime.fromisoformat(event["sent_at"])).total_seconds() > LATE_SECONDS:
+        sent = datetime.fromisoformat(event["sent_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        detail = f"Sent {sent}."
+    return title, str(event["text"]), detail
 
 
 class ClaraApplication(QObject):
@@ -68,6 +78,8 @@ class ClaraApplication(QObject):
         self.tray.show()
         if not self.config.ready:
             self.open_settings(first_run=True)
+        else:
+            self.window.start_history()
         self.start_listener()
         if not background or not self.config.ready:
             self.window.bring_to_front()
@@ -88,6 +100,7 @@ class ClaraApplication(QObject):
             self.config = dialog.config()
             config_module.save(self.config, self._config_path)
             self.start_listener()  # the server or the token may have changed
+            self.window.start_history()  # and so may the user, and their conversations
 
     def _set_autostart(self, enabled: bool) -> None:
         try:
@@ -108,6 +121,7 @@ class ClaraApplication(QObject):
         config = self.config
         self.listener = ReminderWorker(lambda: self._api_factory(config), parent=self)
         self.listener.reminder.connect(self.on_reminder)
+        self.listener.notification.connect(self.on_notification)
         self.listener.connection.connect(self._connection)
         self.listener.server.connect(self._server_said)
         self.listener.start()
@@ -141,3 +155,11 @@ class ClaraApplication(QObject):
         status = STATUS[self.server_state or "running"]  # a reminder reached us, so the server is there
         self.tray.notify(title, "\n".join(part for part in (text, detail, status) if part))
         self.window.add_reminder(text, detail)
+
+    def on_notification(self, event: dict) -> None:
+        """Pop it up, unless it is about the conversation the user is looking at right now."""
+        title, text, detail = describe_notification(event)
+        watching = self.window.isVisible() and self.window.isActiveWindow()
+        if not (watching and event.get("conversation") == self.window.conversation):
+            self.tray.notify(title, "\n".join(part for part in (text, detail) if part))
+        self.window.add_notification(title, text, detail)

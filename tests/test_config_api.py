@@ -6,7 +6,7 @@ import socket
 
 import pytest
 
-from clara_app.api import ApiError, ClaraApi
+from clara_app.api import ApiError, ClaraApi, new_conversation
 from clara_app.config import Config, load, save
 
 
@@ -41,8 +41,9 @@ class TestConfig:
         assert not Config("", "t", "u").ready
         assert not Config("http://x", "t", " ").ready
 
-    def test_the_conversation_is_the_apps_own_thread(self):
-        assert Config(user_id="erwan").conversation == "app:erwan"
+    def test_each_new_conversation_has_its_own_id(self):
+        first, second = new_conversation("erwan"), new_conversation("erwan")
+        assert first.startswith("app:erwan:") and first != second
 
 
 class TestApi:
@@ -62,26 +63,50 @@ class TestApi:
         with pytest.raises(ApiError, match="Cannot reach the Clara server"):
             ClaraApi(config).health()
         with pytest.raises(ApiError, match="Cannot reach"):
-            ClaraApi(config).chat("hi")
+            ClaraApi(config).chat("hi", "app:tester:1")
 
     def test_chat_sends_who_speaks_and_streams_the_answer(self, config, server):
         _, state = server
-        events = list(ClaraApi(config).chat("hello"))
+        events = list(ClaraApi(config).chat("hello", "app:tester:1"))
         assert [e["type"] for e in events] == ["turn", "token", "token", "done"]
         [body] = state.chat_bodies
         assert (body["surface"], body["user_id"], body["user_name"]) == ("app", "tester", "Tess")
-        assert (body["message"], body["conversation"]) == ("hello", "app:tester")
+        assert (body["message"], body["conversation"]) == ("hello", "app:tester:1")
         assert "desktop app" in body["instructions"]
 
     def test_chat_refused_says_why(self, config):
         config.token = "nope"
         with pytest.raises(ApiError, match="401"):
-            ClaraApi(config).chat("hi")
+            ClaraApi(config).chat("hi", "app:tester:1")
 
-    def test_new_thread_deletes_the_conversation(self, config, server):
+    def test_the_conversations_of_this_user(self, config, server):
         _, state = server
-        ClaraApi(config).new_thread()
-        assert state.deleted == ["/v1/conversations/app:tester"]
+        state.add_conversation("app:tester:a", ("Tea timer", "Done."), updated_at="2026-10-01T10:00:00+00:00")
+        state.add_conversation("app:tester:b", ("C pointers", "Addresses."), updated_at="2026-10-02T10:00:00+00:00")
+        api = ClaraApi(config)
+        assert [c["id"] for c in api.conversations()] == ["app:tester:b", "app:tester:a"]
+        assert [c["id"] for c in api.conversations("  tea ")] == ["app:tester:a"]
+        assert state.list_requests == [
+            {"surface": "app", "user_id": "tester"}, {"surface": "app", "user_id": "tester", "q": "tea"}
+        ]
+        shown = api.messages("app:tester:a")
+        assert [(m["role"], m["content"]) for m in shown["messages"]] == [("user", "Tea timer"), ("assistant", "Done.")]
+        assert api.title("app:tester:a") == "Clara's title"
+        api.update_conversation("app:tester:a", pinned=True)
+        api.update_conversation("app:tester:a", title="Tea")
+        assert state.patches == [
+            ("app:tester:a", {"surface": "app", "user_id": "tester", "title": None, "pinned": True}),
+            ("app:tester:a", {"surface": "app", "user_id": "tester", "title": "Tea", "pinned": None}),
+        ]
+        api.delete_conversation("app:tester:a")
+        assert state.deleted == ["/v1/conversations/app:tester:a?surface=app&user_id=tester"]
+        with pytest.raises(ApiError, match="No such conversation.*404"):
+            api.messages("app:tester:a")
+
+    def test_an_id_with_odd_characters_is_quoted_in_the_path(self, config, server):
+        _, state = server
+        state.add_conversation("app:Erwan M/x:1", ("hi", "hello"))
+        assert ClaraApi(config).messages("app:Erwan M/x:1")["id"] == "app:Erwan M/x:1"
 
     def test_the_reminder_stream_gives_the_events(self, config, server):
         _, state = server
@@ -91,10 +116,23 @@ class TestApi:
         assert [e["text"] for e in events if e["type"] == "reminder"] == ["Dentist"]
         assert [e["state"] for e in events if e["type"] == "server"] == ["running"]
 
+    def test_the_stream_is_this_users(self, config, server):
+        _, state = server
+        state.hold_reminders = False
+        list(ClaraApi(config).reminders())
+        assert state.stream_paths == ["/v1/notifications/stream?surface=app&user_id=tester"]
+
+    def test_notify_sends_a_notification(self, config, server):
+        _, state = server
+        assert ClaraApi(config).notify("Done", "Build", ["cli"])["targets"] == ["cli"]
+        assert state.notifications == [
+            {"surface": "app", "user_id": "tester", "text": "Done", "title": "Build", "targets": ["cli"]}
+        ]
+
     def test_closing_a_stream_ends_it_quietly(self, config, server):
         _, state = server
         state.hold.set()
-        stream = ClaraApi(config).chat("hi")
+        stream = ClaraApi(config).chat("hi", "app:tester:1")
         iterator = iter(stream)
         assert next(iterator)["type"] == "turn"
         stream.close()

@@ -88,6 +88,7 @@ class ChatView(QScrollArea):
         row = self._rows.pop(bubble)
         self._column.removeItem(row)
         self.bubbles.remove(bubble)
+        bubble.hide()  # gone now, not only when Qt gets round to deleting it
         bubble.deleteLater()
         row.deleteLater()
 

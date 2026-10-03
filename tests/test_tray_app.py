@@ -12,7 +12,7 @@ from conftest import wait_until
 from PySide6.QtWidgets import QSystemTrayIcon
 
 from clara_app import autostart
-from clara_app.app import ClaraApplication, describe_reminder
+from clara_app.app import ClaraApplication, describe_notification, describe_reminder
 from clara_app.config import Config, load, save
 from clara_app.single import SingleInstance
 from clara_app.tray import Tray
@@ -175,6 +175,58 @@ class TestReminderWorker:
         assert worker.wait(5000)
 
 
+class TestNotifications:
+    def test_the_worker_listens_as_this_user_and_passes_notifications_on(self, qt, config, server):
+        _, state = server
+        state.reminders = [{"type": "notification", "id": 2, "title": "Done", "text": "Build finished"}]
+        got = []
+        worker = ReminderWorker(lambda: ClaraApi(config), pause=30)
+        worker.notification.connect(got.append)
+        worker.start()
+        wait_until(lambda: got)
+        worker.stop()
+        assert worker.wait(5000)
+        assert got[0]["text"] == "Build finished"
+        assert state.stream_paths[0] == "/v1/notifications/stream?surface=app&user_id=tester"
+
+    def test_describe_notification(self):
+        stamp = datetime(2026, 10, 2, 10, 0, tzinfo=timezone.utc)
+        event = {"type": "notification", "title": "", "text": "Done", "sent_at": stamp.isoformat()}
+        assert describe_notification(event, stamp) == ("Clara", "Done", "")
+        title, _, detail = describe_notification({**event, "title": "Build"}, stamp + timedelta(hours=3))
+        assert title == "Build" and detail.startswith("Sent ")
+
+    def test_a_notification_pops_up_and_is_noted(self, qt, tmp_path, config):
+        path = tmp_path / "config.json"
+        save(config, path)
+        application = ClaraApplication(qt, config_path=path)
+        shown = []
+        application.tray.notify = lambda title, text: shown.append((title, text))
+        now = datetime.now(timezone.utc).isoformat()
+        application.on_notification({"type": "notification", "title": "Answer ready", "text": "Done.", "sent_at": now})
+        assert shown == [("Answer ready", "Done.")]
+        assert "Answer ready" in application.window.view.texts()[-1][1]
+        application.quit()
+
+    def test_one_about_the_conversation_in_front_of_the_user_is_only_noted(self, qt, tmp_path, config, monkeypatch):
+        path = tmp_path / "config.json"
+        save(config, path)
+        application = ClaraApplication(qt, config_path=path)
+        shown = []
+        application.tray.notify = lambda title, text: shown.append(title)
+        window = application.window
+        monkeypatch.setattr(window, "isVisible", lambda: True)
+        monkeypatch.setattr(window, "isActiveWindow", lambda: True)
+        window.conversation = "app:tester:1"
+        now = datetime.now(timezone.utc).isoformat()
+        event = {"type": "notification", "title": "Answer ready", "text": "Done.", "sent_at": now}
+        application.on_notification({**event, "conversation": "app:tester:1"})
+        assert shown == []
+        application.on_notification({**event, "conversation": "app:tester:2"})  # another one: it pops up
+        assert shown == ["Answer ready"]
+        application.quit()
+
+
 class TestServerSignal:
     def test_the_worker_passes_on_what_the_server_says(self, qt, config, server):
         _, state = server
@@ -195,11 +247,11 @@ class TestDescribeReminder:
 
     def test_on_time(self):
         now = datetime(2026, 10, 2, 10, 0, 3, tzinfo=timezone.utc)
-        assert describe_reminder(self.event(), now) == ("Clara reminder", "Dentist", "Set by Alice.")
+        assert describe_reminder(self.event(), now) == ("Clara reminder", "Dentist", "")
 
     def test_missed(self):
         title, text, detail = describe_reminder(self.event(), datetime(2026, 10, 2, 16, 0, tzinfo=timezone.utc))
-        assert title == "Clara reminder (missed)" and "It was due" in detail and "Set by Alice" in detail
+        assert title == "Clara reminder (missed)" and "It was due" in detail
 
     def test_the_message_clara_wrote_comes_first(self):
         now = datetime(2026, 10, 2, 10, 0, 3, tzinfo=timezone.utc)
@@ -225,7 +277,7 @@ class TestApplication:
         application.on_reminder(
             {"type": "reminder", "text": "Dentist", "due_at": now.isoformat(), "fired_at": now.isoformat(), "from": "Alice"}
         )
-        assert shown == [("Clara reminder", "Dentist\nSet by Alice.\nClara is running")]  # and the state of the server
+        assert shown == [("Clara reminder", "Dentist\nClara is running")]  # and the state of the server
         assert "Dentist" in application.window.view.texts()[-1][1]
         application.quit()
 
@@ -333,6 +385,20 @@ class TestApplication:
         assert application.config.user_id == "someone-else"
         assert load(tmp_path / "config.json", env={}).user_name == "Else"
         assert application.listener is not None and application.listener is not first
+        application.quit()
+
+    def test_at_the_start_the_last_conversation_is_shown(self, qt, tmp_path, config, server):
+        _, state = server
+        state.add_conversation("app:tester:old", ("old question", "old answer"), updated_at="2026-09-01T10:00:00+00:00")
+        state.add_conversation("app:tester:new", ("Tea timer", "Set."), updated_at="2026-10-02T10:00:00+00:00")
+        state.add_conversation(
+            "app:tester:pin", ("pinned", "ok"), updated_at="2026-08-01T10:00:00+00:00", pinned=True
+        )
+        application = self.make(qt, tmp_path, config)
+        application.start(background=True)
+        window = application.window
+        wait_until(lambda: window.conversation == "app:tester:new")
+        assert [text for role, text in window.view.texts() if role != "note"] == ["Tea timer", "Set."]
         application.quit()
 
     def test_quit_stops_everything(self, qt, tmp_path, config, server):
