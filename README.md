@@ -49,7 +49,8 @@ The first time, a dialog asks for the server (`http://127.0.0.1:8765` by default
 of the server's `CLARA_TOKENS`), your id and, if you like, your name. *Test connection* checks them.
 They are saved in `%APPDATA%\clara-app\config.json` (the token is stored there as plain text, like
 the `.env` files of the other clients). `CLARA_URL` and `CLARA_TOKEN` in the environment fill in what
-the file leaves empty.
+the file leaves empty. For a server reached through Tailscale, type its `https://<machine>.<tailnet>.ts.net`
+address (the dialog warns about plain `http://` to another machine).
 
 The app speaks to the server as the surface **`app`**. If the server limits the surfaces of its
 tokens, add it: `CLARA_CLIENT_SURFACES=...,app=app`. Its account is `app:<your id>`, and its conversations

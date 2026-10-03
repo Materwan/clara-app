@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .api import ClaraApi
-from .config import Config
+from .config import Config, url_hint
 from .workers import ProbeWorker
 
 
@@ -30,7 +30,7 @@ class SettingsDialog(QDialog):
         self._probe: ProbeWorker | None = None
 
         self.url = QLineEdit(config.url)
-        self.url.setPlaceholderText("http://127.0.0.1:8765")
+        self.url.setPlaceholderText("http://127.0.0.1:8765, or https://<machine>.<tailnet>.ts.net")
         self.token = QLineEdit(config.token)
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("a token of CLARA_TOKENS")
@@ -43,6 +43,10 @@ class SettingsDialog(QDialog):
         form.addRow("Token", self.token)
         form.addRow("Your id", self.user_id)
         form.addRow("Your name", self.user_name)
+
+        self.url_note = QLabel("")
+        self.url_note.setWordWrap(True)
+        self.url_note.setStyleSheet("color: #9a6700;")
 
         self.test = QPushButton("Test connection")
         self.test.clicked.connect(self._run_probe)
@@ -63,6 +67,7 @@ class SettingsDialog(QDialog):
             intro.setWordWrap(True)
             layout.addWidget(intro)
         layout.addLayout(form)
+        layout.addWidget(self.url_note)
         layout.addLayout(test_row)
         layout.addWidget(buttons)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
@@ -82,6 +87,9 @@ class SettingsDialog(QDialog):
 
     def _update_save(self) -> None:
         self.save_button.setEnabled(self.config().ready)
+        hint = url_hint(self.url.text())
+        self.url_note.setText(hint)
+        self.url_note.setVisible(bool(hint))
 
     def _run_probe(self) -> None:
         self.test.setEnabled(False)

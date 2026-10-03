@@ -11,6 +11,7 @@ import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 DEFAULT_URL = "http://127.0.0.1:8765"
 
@@ -32,6 +33,22 @@ class Config:
     def ready(self) -> bool:
         """Enough to talk to a server."""
         return bool(self.url.strip() and self.token.strip() and self.user_id.strip())
+
+
+def url_hint(url: str) -> str:
+    """A word of advice about the server address typed, or "" when it looks fine."""
+    try:
+        parts = urlsplit(url.strip())
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return ""
+    if parts.scheme != "http" or not host:
+        return ""
+    if host.endswith(".ts.net"):
+        return "A Tailscale address is served over HTTPS: use https:// (the address clara-server shows in /status)."
+    if host not in ("localhost", "127.0.0.1", "::1"):
+        return "Plain http: the token crosses the network unencrypted. Prefer an https:// address (Tailscale, a proxy)."
+    return ""
 
 
 def default_user() -> str:

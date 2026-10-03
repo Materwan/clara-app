@@ -7,7 +7,21 @@ import socket
 import pytest
 
 from clara_app.api import ApiError, ClaraApi, new_conversation
-from clara_app.config import Config, load, save
+from clara_app.config import Config, load, save, url_hint
+
+
+class TestUrlHint:
+    @pytest.mark.parametrize(
+        "url", ["http://127.0.0.1:8765", "http://localhost:8765", "https://box.tail1234.ts.net", "https://nas:8765", ""]
+    )
+    def test_nothing_to_say(self, url):
+        assert url_hint(url) == ""
+
+    def test_a_tailscale_address_needs_https(self):
+        assert "https://" in url_hint("http://box.tail1234.ts.net")
+
+    def test_plain_http_to_another_machine_is_flagged(self):
+        assert "unencrypted" in url_hint("http://192.168.1.20:8765")
 
 
 class TestConfig:
