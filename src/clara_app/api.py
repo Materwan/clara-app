@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import json
+import socket
 import ssl
 import uuid
 from typing import Iterator
@@ -55,6 +56,35 @@ def _detail(response: httpx.Response) -> str:
         return response.text.strip()[:300] or response.reason_phrase
 
 
+SIGNED_OUT = "You were signed out of the Clara server. Open Settings and enter your password again."
+
+
+def _refused(response: httpx.Response, user_token: bool) -> str:
+    """What to tell the user about an error answer."""
+    if response.status_code == 401 and user_token:
+        return SIGNED_OUT
+    return f"Clara server: {_detail(response)} (HTTP {response.status_code})"
+
+
+def login(url: str, user: str, password: str, timeout: float = 15.0) -> dict:
+    """Sign in with a password: `{"token", "user": {"name", ...}}`. The server gives a token bound to this user
+    on the surface of the app; the password is not kept."""
+    base = url.strip().rstrip("/")
+    try:
+        response = httpx.post(
+            base + "/v1/auth/login",
+            json={"username": user.strip(), "password": password, "surface": SURFACE, "device": socket.gethostname()},
+            timeout=timeout, verify=_tls(),
+        )
+    except httpx.ConnectError:
+        raise ApiError(f"Cannot reach the Clara server at {base}.") from None
+    except httpx.HTTPError as error:
+        raise ApiError(f"The Clara server did not answer: {error}") from None
+    if response.is_error:
+        raise ApiError(_detail(response))
+    return response.json()
+
+
 class EventStream:
     """The Server-Sent Events of a response. Iterating yields the decoded events; `close()` (from any
     thread) ends the connection, which ends the iteration."""
@@ -89,6 +119,7 @@ class ClaraApi:
         self.config = config
         self.base = config.url.strip().rstrip("/")
         self._headers = {"Authorization": f"Bearer {config.token.strip()}"}
+        self._user_token = config.token.strip().startswith("clu_")  # from a password login (else a shared client token)
 
     # -- plumbing ------------------------------------------------------------------ #
 
@@ -106,7 +137,7 @@ class ClaraApi:
             response = client.send(client.build_request(method, path, **options), stream=True)
             if response.is_error:
                 response.read()
-                raise ApiError(f"Clara server: {_detail(response)} (HTTP {response.status_code})")
+                raise ApiError(_refused(response, self._user_token))
         except httpx.ConnectError:
             client.close()
             raise ApiError(f"Cannot reach the Clara server at {self.base}.") from None
@@ -127,7 +158,7 @@ class ClaraApi:
         except httpx.HTTPError as error:
             raise ApiError(f"The Clara server did not answer: {error}") from None
         if response.is_error and response.status_code not in accept:
-            raise ApiError(f"Clara server: {_detail(response)} (HTTP {response.status_code})")
+            raise ApiError(_refused(response, self._user_token))
         return response
 
     # -- the server ---------------------------------------------------------------- #

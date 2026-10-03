@@ -13,7 +13,7 @@ from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
 
-from .api import ApiError, ClaraApi, EventStream
+from .api import ApiError, ClaraApi, EventStream, login
 from .documents import DocumentError, read_document
 
 RECONNECT_SECONDS = 5.0
@@ -105,6 +105,25 @@ class ReminderWorker(QThread):
                 self.connection.emit(False)
             self._stream = None
             self._stop.wait(self._pause)
+
+
+class LoginWorker(QThread):
+    """Signs in with a password: `signed_in(token, user name)`, or `failed(reason)`."""
+
+    signed_in = Signal(str, str)
+    failed = Signal(str)
+
+    def __init__(self, url: str, user: str, password: str, parent=None):
+        super().__init__(parent)
+        self._url, self._user, self._password = url, user, password
+
+    def run(self) -> None:
+        try:
+            answer = login(self._url, self._user, self._password)
+        except ApiError as error:
+            self.failed.emit(str(error))
+            return
+        self.signed_in.emit(answer["token"], answer["user"]["name"])
 
 
 class ProbeWorker(QThread):

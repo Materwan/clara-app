@@ -45,11 +45,13 @@ python -m venv .venv
 .venv\Scripts\clara-app            # or: .venv\Scripts\python -m clara_app
 ```
 
-The first time, a dialog asks for the server (`http://127.0.0.1:8765` by default), a **token** (one
-of the server's `CLARA_TOKENS`), your id and, if you like, your name. *Test connection* checks them.
-They are saved in `%APPDATA%\clara-app\config.json` (the token is stored there as plain text, like
-the `.env` files of the other clients). `CLARA_URL` and `CLARA_TOKEN` in the environment fill in what
-the file leaves empty. For a server reached through Tailscale, type its `https://<machine>.<tailnet>.ts.net`
+The first time, a dialog asks for the server (`http://127.0.0.1:8765` by default), your **user name and
+password** (the administrator makes them with `/user add`) and, if you like, your name. *Test connection* signs
+in and checks. The password is used once and **not kept**: the server gives the app a sign-in token, saved in
+`%APPDATA%\clara-app\config.json` as plain text (like the `.env` files of the other clients). If the token stops
+working (you were signed out, the password changed) the app says so: open Settings and type the password again.
+A shared client token (an entry of `CLARA_TOKENS`) still works in the *Sign-in token* field, or `CLARA_TOKEN` in the
+environment; `CLARA_URL` fills in the server when the file leaves it empty. For a server reached through Tailscale, type its `https://<machine>.<tailnet>.ts.net`
 address (the dialog warns about plain `http://` to another machine).
 
 The app speaks to the server as the surface **`app`**. If the server limits the surfaces of its

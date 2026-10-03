@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from .api import ClaraApi
 from .config import Config, url_hint
-from .workers import ProbeWorker
+from .workers import LoginWorker, ProbeWorker
 
 
 class SettingsDialog(QDialog):
@@ -28,20 +28,27 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(420)
         self._config = config
         self._probe: ProbeWorker | None = None
+        self._login: LoginWorker | None = None
+        self._then_accept = False
 
         self.url = QLineEdit(config.url)
         self.url.setPlaceholderText("http://127.0.0.1:8765, or https://<machine>.<tailnet>.ts.net")
+        self.user_id = QLineEdit(config.user_id)
+        self.user_id.setPlaceholderText("your user name on the server")
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.setPlaceholderText("only to sign in: not kept" if config.token else "your password")
         self.token = QLineEdit(config.token)
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.token.setPlaceholderText("a token of CLARA_TOKENS")
-        self.user_id = QLineEdit(config.user_id)
+        self.token.setPlaceholderText("filled in by signing in (or a client token of CLARA_TOKENS)")
         self.user_name = QLineEdit(config.user_name)
         self.user_name.setPlaceholderText("how Clara should call you (optional)")
 
         form = QFormLayout()
         form.addRow("Server", self.url)
-        form.addRow("Token", self.token)
-        form.addRow("Your id", self.user_id)
+        form.addRow("User name", self.user_id)
+        form.addRow("Password", self.password)
+        form.addRow("Sign-in token", self.token)
         form.addRow("Your name", self.user_name)
 
         self.url_note = QLabel("")
@@ -71,7 +78,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(test_row)
         layout.addWidget(buttons)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
-        for field in (self.url, self.token, self.user_id):
+        for field in (self.url, self.token, self.user_id, self.password):
             field.textChanged.connect(self._update_save)
         self._update_save()
 
@@ -85,13 +92,53 @@ class SettingsDialog(QDialog):
             user_name=self.user_name.text().strip(),
         )
 
+    def accept(self) -> None:
+        """Save. A password typed is first exchanged for a token (and then forgotten)."""
+        if self.password.text():
+            self._then_accept = True
+            self._sign_in()
+        else:
+            super().accept()
+
+    def _sign_in(self) -> None:
+        self.test.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.verdict.setStyleSheet("")
+        self.verdict.setText("Signing in…")
+        self._login = LoginWorker(self.url.text(), self.user_id.text(), self.password.text(), self)
+        self._login.signed_in.connect(self._signed_in)
+        self._login.failed.connect(self._sign_in_failed)
+        self._login.start()
+
+    def _signed_in(self, token: str, name: str) -> None:
+        self.token.setText(token)
+        self.user_id.setText(name)  # as the server spells it
+        self.password.clear()
+        self.test.setEnabled(True)
+        if self._then_accept:
+            self._then_accept = False
+            super().accept()
+        else:
+            self._run_probe()
+
+    def _sign_in_failed(self, message: str) -> None:
+        self._then_accept = False
+        self.test.setEnabled(True)
+        self._update_save()
+        self.verdict.setStyleSheet("color: #b3261e;")
+        self.verdict.setText(message)
+
     def _update_save(self) -> None:
-        self.save_button.setEnabled(self.config().ready)
+        config = self.config()
+        self.save_button.setEnabled(bool(config.url and config.user_id and (config.token or self.password.text())))
         hint = url_hint(self.url.text())
         self.url_note.setText(hint)
         self.url_note.setVisible(bool(hint))
 
     def _run_probe(self) -> None:
+        if self.password.text():  # sign in first; the connection is tested once it worked
+            self._then_accept = False
+            return self._sign_in()
         self.test.setEnabled(False)
         self.verdict.setStyleSheet("")
         self.verdict.setText("Connecting…")
@@ -105,6 +152,7 @@ class SettingsDialog(QDialog):
         self.verdict.setText(message)
 
     def done(self, result: int) -> None:
-        if self._probe is not None and self._probe.isRunning():
-            self._probe.wait(15_000)
+        for worker in (self._probe, self._login):
+            if worker is not None and worker.isRunning():
+                worker.wait(15_000)
         super().done(result)

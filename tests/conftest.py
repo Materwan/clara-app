@@ -19,6 +19,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from clara_app.config import Config  # noqa: E402
 
 TOKEN = "app-token"
+USER_TOKEN = "clu_fake-token"  # what a password login gives
+PASSWORD = "right-password-1"
 
 
 @pytest.fixture(scope="session")
@@ -71,6 +73,8 @@ class State:
         self.patches: list[tuple[str, dict]] = []
         self.list_requests: list[dict] = []  # the query of each GET /v1/conversations
         self.hold_messages = threading.Event()  # set: GET .../messages waits until it is cleared
+        self.signed_out = False  # the token a password login gave is no longer accepted
+        self.logins: list[dict] = []  # bodies of POST /v1/auth/login
 
     def add_conversation(self, conversation: str, *exchanges: tuple[str, str], title: str = "",
                          updated_at: str = "", pinned: bool = False) -> None:
@@ -114,7 +118,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorised(self) -> bool:
-        if self.headers.get("Authorization") == f"Bearer {TOKEN}":
+        accepted = [TOKEN] + ([] if self.state.signed_out else [USER_TOKEN])
+        if self.headers.get("Authorization") in [f"Bearer {token}" for token in accepted]:
             return True
         self.reply(401, {"detail": "Missing or invalid token"})
         return False
@@ -208,6 +213,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/v1/auth/login":
+            self.state.logins.append(body)
+            if body.get("password") != PASSWORD:
+                return self.reply(401, {"detail": "Wrong user name or password"})
+            return self.reply(200, {"token": USER_TOKEN, "user": {"name": body["username"].lower()}, "surface": "app"})
         if not self.authorised():
             return
         if self.path == "/v1/notifications":
