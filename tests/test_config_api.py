@@ -143,6 +143,14 @@ class TestApi:
             {"surface": "app", "user_id": "tester", "text": "Done", "title": "Build", "targets": ["cli"]}
         ]
 
+    def test_the_notification_delay_is_read_and_set(self, config, server):
+        _, state = server
+        assert ClaraApi(config).settings()["notify_after"] is None
+        assert ClaraApi(config).set_notify_after(45)["notify_after"] == 45
+        assert ClaraApi(config).set_notify_after(0)["notify_after_effective"] == 0  # never
+        assert ClaraApi(config).set_notify_after(None)["notify_after_effective"] == 120
+        assert state.settings_patches[0] == {"surface": "app", "user_id": "tester", "user_name": "Tess", "notify_after": 45}
+
     def test_closing_a_stream_ends_it_quietly(self, config, server):
         _, state = server
         state.hold.set()

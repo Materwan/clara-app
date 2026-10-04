@@ -26,9 +26,10 @@ class ChatWorker(QThread):
     answered = Signal()
     failed = Signal(str)
 
-    def __init__(self, api: ClaraApi, message: str, conversation: str, parent=None):
+    def __init__(self, api: ClaraApi, message: str, conversation: str, parent=None, project: int | None = None):
         super().__init__(parent)
         self._api, self._message, self.conversation = api, message, conversation
+        self.project = project  # a new conversation goes in it
         self._stream: EventStream | None = None
         self._cancelled = False
 
@@ -40,7 +41,7 @@ class ChatWorker(QThread):
 
     def run(self) -> None:
         try:
-            self._stream = self._api.chat(self._message, self.conversation)
+            self._stream = self._api.chat(self._message, self.conversation, self.project)
             if self._cancelled:
                 self._stream.close()
                 return

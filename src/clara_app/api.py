@@ -5,6 +5,7 @@ It is meant to be called from worker threads (see workers.py), never from the UI
 
 from __future__ import annotations
 
+import base64
 import functools
 import json
 import socket
@@ -20,6 +21,8 @@ from .config import Config
 
 CHAT_READ_TIMEOUT = 300.0  # a model can think for a long while before its first token
 REMINDER_READ_TIMEOUT = 60.0  # the server sends a keepalive every 15 s
+PROJECT_READ_TIMEOUT = 300.0  # files to read (PDF, a .zip), a GitHub repository to download
+_KEEP = object()  # update_conversation: leave the project as it is
 
 INSTRUCTIONS = (
     "You are talking through Clara's desktop app, a small chat window. "
@@ -36,6 +39,10 @@ def new_conversation(user_id: str) -> str:
 
 def _path(conversation: str) -> str:
     return "/v1/conversations/" + quote(conversation, safe=":")
+
+
+def _project(project_id: int) -> str:
+    return f"/v1/projects/{int(project_id)}"
 
 
 class ApiError(Exception):
@@ -149,9 +156,11 @@ class ClaraApi:
             raise
         return EventStream(client, response)
 
-    def _call(self, method: str, path: str, accept: tuple[int, ...] = (), **options) -> httpx.Response:
+    def _call(
+        self, method: str, path: str, accept: tuple[int, ...] = (), read: float = 15.0, **options
+    ) -> httpx.Response:
         try:
-            with self._client(15.0) as client:
+            with self._client(read) as client:
                 response = client.request(method, path, **options)
         except httpx.ConnectError:
             raise ApiError(f"Cannot reach the Clara server at {self.base}.") from None
@@ -170,8 +179,9 @@ class ClaraApi:
         self._call("GET", "/v1/memory/facts", accept=(404,), params=self._identity())
         return info
 
-    def chat(self, message: str, conversation: str) -> EventStream:
-        """Events of one turn of `conversation`: `token`, `usage`, `done`, `error`..."""
+    def chat(self, message: str, conversation: str, project: int | None = None) -> EventStream:
+        """Events of one turn of `conversation`: `token`, `usage`, `done`, `error`... A new conversation goes in
+        `project` (one that exists stays in its own)."""
         body = {
             **self._identity(),
             "user_name": self.config.user_name or None,
@@ -179,14 +189,19 @@ class ClaraApi:
             "conversation": conversation,
             "instructions": INSTRUCTIONS,
         }
+        if project:
+            body["project"] = project
         return self._open("POST", "/v1/chat/stream", CHAT_READ_TIMEOUT, json=body)
 
     # -- the conversations ------------------------------------------------------------ #
 
-    def conversations(self, query: str = "") -> list[dict]:
+    def conversations(self, query: str = "", project: int | str | None = None) -> list[dict]:
         """This user's conversations in the app, pinned first, then the last written in: `id`, `title`,
-        `pinned`, `updated_at`, `preview`... `query` keeps those whose title or messages contain it."""
+        `pinned`, `updated_at`, `preview`, `project`... `query` keeps those whose title or messages contain it;
+        `project` those of a project ("none": those in no project; None: all of them)."""
         params = {**self._identity(), **({"q": query.strip()} if query.strip() else {})}
+        if project is not None:
+            params["project"] = str(project)
         return self._call("GET", "/v1/conversations", params=params).json()["conversations"]
 
     def messages(self, conversation: str) -> dict:
@@ -198,9 +213,14 @@ class ClaraApi:
         """Clara's title for the conversation, written now if it has none yet."""
         return self._call("POST", _path(conversation) + "/title", json=self._identity()).json()["title"]
 
-    def update_conversation(self, conversation: str, title: str | None = None, pinned: bool | None = None) -> dict:
-        """Rename (an empty title: none) and/or pin a conversation."""
+    def update_conversation(
+        self, conversation: str, title: str | None = None, pinned: bool | None = None, project: object = _KEEP
+    ) -> dict:
+        """Rename (an empty title: none) and/or pin a conversation, and/or move it to a project (None: out of
+        its project)."""
         body = {**self._identity(), "title": title, "pinned": pinned}
+        if project is not _KEEP:
+            body["project"] = project
         return self._call("PATCH", _path(conversation), json=body).json()
 
     def delete_conversation(self, conversation: str) -> None:
@@ -211,6 +231,75 @@ class ClaraApi:
         """This user's reminders as they come due and notifications as they are sent, the ones missed since
         this client last connected first, and what the server is doing."""
         return self._open("GET", "/v1/notifications/stream", REMINDER_READ_TIMEOUT, params=self._identity())
+
+    def settings(self) -> dict:
+        """This user's settings on the server: `notify_after` (seconds a task takes before it notifies them when
+        done; 0: never; None: not set), `notify_after_default` and `notify_after_effective`."""
+        return self._call("GET", "/v1/settings", params=self._identity()).json()
+
+    def set_notify_after(self, seconds: int | None) -> dict:
+        """How long a task takes before this user is notified when it is done (0: never; None: the server's
+        default). Returns the settings."""
+        body = {**self._identity(), "user_name": self.config.user_name or None, "notify_after": seconds}
+        return self._call("PATCH", "/v1/settings", json=body).json()
+
+    # -- projects --------------------------------------------------------------------------- #
+
+    def projects(self) -> list[dict]:
+        """This user's projects (the same on every client of theirs): `id`, `name`, `description`, `files`,
+        `size`, `conversations`, `context`..."""
+        return self._call("GET", "/v1/projects", params=self._identity()).json()["projects"]
+
+    def project(self, project_id: int) -> dict:
+        """A project, with its `sources` (GitHub repositories) and its `file_list` (`path`, `size`, `source`)."""
+        return self._call("GET", _project(project_id), params=self._identity()).json()
+
+    def create_project(self, name: str, description: str = "", instructions: str = "") -> dict:
+        body = {
+            **self._identity(), "user_name": self.config.user_name or None,
+            "name": name, "description": description, "instructions": instructions,
+        }
+        return self._call("POST", "/v1/projects", json=body).json()
+
+    def update_project(
+        self, project_id: int, name: str | None = None, description: str | None = None, instructions: str | None = None
+    ) -> dict:
+        body = {**self._identity(), "name": name, "description": description, "instructions": instructions}
+        return self._call("PATCH", _project(project_id), json=body).json()
+
+    def delete_project(self, project_id: int) -> dict:
+        """Delete a project and its files; its conversations stay, in no project."""
+        return self._call("DELETE", _project(project_id), params=self._identity()).json()
+
+    def upload_files(self, project_id: int, files: list[tuple[str, bytes]]) -> dict:
+        """Add files to a project, `(path in the project, bytes)`; the server reads them (PDF, Word, .zip...).
+        `added`, `replaced`, `skipped` (`path`, `reason`), `skipped_count` and the `project`."""
+        body = {
+            **self._identity(),
+            "files": [{"path": path, "data": base64.b64encode(data).decode("ascii")} for path, data in files],
+        }
+        return self._call("POST", _project(project_id) + "/files", read=PROJECT_READ_TIMEOUT, json=body).json()
+
+    def file(self, project_id: int, path: str) -> dict:
+        params = {**self._identity(), "path": path}
+        return self._call("GET", _project(project_id) + "/file", params=params).json()
+
+    def remove_file(self, project_id: int, path: str, folder: bool = False) -> dict:
+        params = {**self._identity(), "path": path, **({"folder": "true"} if folder else {})}
+        return self._call("DELETE", _project(project_id) + "/files", params=params).json()
+
+    def add_repository(self, project_id: int, repo: str, ref: str = "") -> dict:
+        """Download a GitHub repository's text files into the project (the server does it)."""
+        body = {**self._identity(), "repo": repo, "ref": ref}
+        return self._call("POST", _project(project_id) + "/github", read=PROJECT_READ_TIMEOUT, json=body).json()
+
+    def sync_repository(self, project_id: int, source_id: int) -> dict:
+        path = f"{_project(project_id)}/sources/{int(source_id)}/sync"
+        return self._call("POST", path, read=PROJECT_READ_TIMEOUT, json=self._identity()).json()
+
+    def remove_repository(self, project_id: int, source_id: int) -> dict:
+        path = f"{_project(project_id)}/sources/{int(source_id)}"
+        return self._call("DELETE", path, params=self._identity()).json()
 
     def notify(self, text: str, title: str = "", targets: list[str] | None = None) -> dict:
         """Send this user a notification, on the surfaces in `targets` (empty: on all of theirs)."""

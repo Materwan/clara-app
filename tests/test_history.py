@@ -81,7 +81,7 @@ def test_the_panel_shows_pinned_ones_first_under_headings(qt):
     ]
     assert panel.list.currentItem().text() == "Tea timer"
     assert [action.text() for action in panel.menu_for("p").actions() if action.text()] == [
-        "Rename…", "Unpin", "Delete…"
+        "Rename…", "Unpin", "Move to a project…", "Delete…"
     ]
     assert "Pin" in [action.text() for action in panel.menu_for("a").actions()]
     panel.show_conversations([], current=None)

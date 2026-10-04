@@ -86,6 +86,66 @@ class TestDialog:
         dialog.password.setText("x")
         assert dialog.save_button.isEnabled()
 
+    def test_the_dialog_shows_the_delay_the_server_has_and_leaves_it_alone_if_unchanged(self, qt, server):
+        url, state = server
+        state.notify_after = 300
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        assert not dialog.notify_mode.isEnabled()  # not before the server has said what it is
+        wait_until(lambda: dialog.notify_mode.isEnabled())
+        assert (dialog.notify_mode.currentData(), dialog.notify_seconds.value()) == ("after", 300)
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+        assert state.settings_patches == []
+
+    def test_a_changed_delay_is_saved_on_the_server_when_the_dialog_is_accepted(self, qt, server):
+        url, state = server
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: dialog.notify_mode.isEnabled())
+        assert dialog.notify_mode.currentData() == "default" and not dialog.notify_seconds.isEnabled()
+        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("after"))
+        assert dialog.notify_seconds.isEnabled()
+        dialog.notify_seconds.setValue(90)
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+        assert state.notify_after == 90
+
+    def test_never_and_the_servers_delay_can_be_chosen_again(self, qt, server):
+        url, state = server
+        state.notify_after = 90
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: dialog.notify_mode.isEnabled())
+        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("never"))
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+        assert state.notify_after == 0
+        again = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: again.notify_mode.isEnabled())
+        assert again.notify_mode.currentData() == "never"
+        again.notify_mode.setCurrentIndex(again.notify_mode.findData("default"))
+        again.accept()
+        wait_until(lambda: again.result() == QDialog.DialogCode.Accepted)
+        assert state.notify_after is None
+
+    def test_a_server_that_refuses_the_delay_keeps_the_dialog_open_and_says_why(self, qt, server):
+        url, state = server
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: dialog.notify_mode.isEnabled())
+        state.signed_out = True  # the token is refused from now on
+        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("never"))
+        dialog.accept()
+        wait_until(lambda: "was not saved" in dialog.verdict.text())
+        assert dialog.result() != QDialog.DialogCode.Accepted and dialog.save_button.isEnabled()
+
+    def test_the_connection_can_be_saved_without_reaching_the_delay(self, qt):
+        with socket.socket() as sock:  # nobody listens: the delay cannot be read
+            sock.bind(("127.0.0.1", 0))
+            url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: not dialog._calls[0].isRunning())
+        assert not dialog.notify_mode.isEnabled()
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+
     def test_a_saved_token_is_enough_to_save_again(self, qt, server):
         url, state = server
         dialog = dialog_for(url, password="", token=USER_TOKEN)

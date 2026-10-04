@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import gc
 import json
 import os
@@ -75,6 +76,35 @@ class State:
         self.hold_messages = threading.Event()  # set: GET .../messages waits until it is cleared
         self.signed_out = False  # the token a password login gave is no longer accepted
         self.logins: list[dict] = []  # bodies of POST /v1/auth/login
+        self.notify_after: int | None = None  # the user's setting (None: not set, the server's 120 s applies)
+        self.settings_patches: list[dict] = []  # bodies of PATCH /v1/settings
+        # projects: id -> {"id", "name", "description", "instructions", ...}; their files: id -> {path: text}
+        self.projects: dict[int, dict] = {}
+        self.project_files: dict[int, dict[str, str]] = {}
+        self.project_sources: dict[int, list[dict]] = {}
+        self.uploads: list[list[str]] = []  # the paths of each upload request
+        self.project_requests: list[tuple[str, str]] = []  # (method, path) of each /v1/projects request
+
+    def add_project(self, name: str, **files: str) -> dict:
+        project_id = max(self.projects, default=0) + 1
+        self.projects[project_id] = {"id": project_id, "name": name, "description": "", "instructions": "",
+                                     "created_at": now(), "updated_at": now()}
+        self.project_files[project_id] = dict(files)
+        self.project_sources[project_id] = []
+        return self.describe_project(project_id)
+
+    def describe_project(self, project_id: int) -> dict:
+        files = self.project_files[project_id]
+        size = sum(len(text) for text in files.values())
+        return {
+            **self.projects[project_id], "files": len(files), "size": size,
+            "conversations": sum(1 for c in self.conversations.values() if c.get("project") == project_id),
+            "context": {"tokens": size // 4, "window": 32768, "percent": 0.1, "inline": True, "inline_percent": 40},
+            "limits": {"size": 20_000_000, "files": 5000},
+            "sources": self.project_sources[project_id],
+            "file_list": [{"path": path, "kind": "", "size": len(text), "source": None, "added_at": now()}
+                          for path, text in sorted(files.items())],
+        }
 
     def add_conversation(self, conversation: str, *exchanges: tuple[str, str], title: str = "",
                          updated_at: str = "", pinned: bool = False) -> None:
@@ -88,11 +118,12 @@ class State:
             for role, content in (("user", question), ("assistant", answer))
         ]
 
-    def listed(self, query: str = "") -> list[dict]:
+    def listed(self, query: str = "", project: str | None = None) -> list[dict]:
         found = [
             info for info in self.conversations.values()
-            if not query or query.lower() in info["title"].lower()
-            or any(query.lower() in m["content"].lower() for m in self.messages.get(info["id"], []))
+            if (project is None or (project == "none" and not info.get("project")) or str(info.get("project")) == project)
+            and (not query or query.lower() in info["title"].lower()
+                 or any(query.lower() in m["content"].lower() for m in self.messages.get(info["id"], [])))
         ]
         found.sort(key=lambda info: info["updated_at"], reverse=True)
         found.sort(key=lambda info: not info["pinned"])
@@ -117,6 +148,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def settings_payload(self) -> dict:
+        own = self.state.notify_after
+        return {"notify_after": own, "notify_after_default": 120, "notify_after_effective": 120 if own is None else own}
+
     def authorised(self) -> bool:
         accepted = [TOKEN] + ([] if self.state.signed_out else [USER_TOKEN])
         if self.headers.get("Authorization") in [f"Bearer {token}" for token in accepted]:
@@ -132,6 +167,72 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
+
+    def project_route(self, method: str, body: dict | None = None) -> None:
+        """The /v1/projects routes, as the real server answers them (enough of it for the app)."""
+        state = self.state
+        parts = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(parts.query).items()}
+        segments = parts.path.strip("/").split("/")[2:]  # after v1/projects
+        state.project_requests.append((method, self.path))
+        if not segments:
+            if method == "GET":
+                return self.reply(200, {"projects": [state.describe_project(i) for i in state.projects]})
+            project = state.add_project(body["name"])
+            state.projects[project["id"]].update(description=body.get("description", ""), instructions=body.get("instructions", ""))
+            return self.reply(201, state.describe_project(project["id"]))
+        project_id = int(segments[0])
+        if project_id not in state.projects:
+            return self.reply(404, {"detail": "No such project of yours"})
+        rest = segments[1:]
+        files = state.project_files[project_id]
+        if not rest:
+            if method == "PATCH":
+                for key in ("name", "description", "instructions"):
+                    if body.get(key) is not None:
+                        state.projects[project_id][key] = body[key]
+            elif method == "DELETE":
+                for info in state.conversations.values():
+                    if info.get("project") == project_id:
+                        info["project"] = None
+                state.projects.pop(project_id)
+                return self.reply(200, {"ok": True, "conversations_moved": 0})
+            return self.reply(200, state.describe_project(project_id))
+        if rest == ["files"] and method == "POST":
+            added, skipped = [], []
+            state.uploads.append([item["path"] for item in body["files"]])
+            for item in body["files"]:
+                text = base64.b64decode(item["data"]).decode("utf-8", "replace")
+                if text.strip():
+                    files[item["path"]] = text
+                    added.append(item["path"])
+                else:
+                    skipped.append({"path": item["path"], "reason": "empty"})
+            return self.reply(200, {"added": added, "replaced": [], "skipped": skipped, "skipped_count": len(skipped),
+                                    "project": state.describe_project(project_id)})
+        if rest == ["files"] and method == "DELETE":
+            files.pop(query["path"], None)
+            return self.reply(200, {"removed": 1, "project": state.describe_project(project_id)})
+        if rest == ["file"]:
+            return self.reply(200, {"path": query["path"], "kind": "", "size": len(files[query["path"]]),
+                                    "source": None, "content": files[query["path"]]})
+        if rest == ["github"]:
+            name = body["repo"].split("/")[-1]
+            source = {"id": len(state.project_sources[project_id]) + 1, "kind": "github", "repo": body["repo"],
+                      "ref": body.get("ref", ""), "folder": name, "commit": "abc1234", "synced_at": now(), "files": 1,
+                      "size": 7, "skipped": 0, "problem": ""}
+            state.project_sources[project_id].append(source)
+            files[f"{name}/README.md"] = "# Hello"
+            return self.reply(200, {"added": [f"{name}/README.md"], "replaced": [], "skipped": [], "skipped_count": 0,
+                                    "project": state.describe_project(project_id)})
+        if len(rest) >= 2 and rest[0] == "sources":
+            sources = state.project_sources[project_id]
+            if method == "DELETE":
+                state.project_sources[project_id] = [s for s in sources if s["id"] != int(rest[1])]
+                return self.reply(200, {"removed": 1, "project": state.describe_project(project_id)})
+            return self.reply(200, {"added": ["x"], "replaced": [], "skipped": [], "skipped_count": 0,
+                                    "project": state.describe_project(project_id)})
+        return self.reply(404, {"detail": "no such route"})
 
     def conversation_route(self) -> tuple[str, str, dict]:
         """`(conversation, what follows it, query)` of a /v1/conversations/... path."""
@@ -149,10 +250,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/v1/memory/facts"):
             return self.reply(404, {"detail": "Nobody known as app:tester"})
+        if self.path.split("?")[0] == "/v1/settings":
+            return self.reply(200, self.settings_payload())
+        if self.path.startswith("/v1/projects"):
+            return self.project_route("GET")
         if self.path.split("?")[0] == "/v1/conversations":
             query = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
             self.state.list_requests.append(query)
-            return self.reply(200, {"conversations": self.state.listed(query.get("q", ""))})
+            return self.reply(200, {"conversations": self.state.listed(query.get("q", ""), query.get("project"))})
         if self.path.startswith("/v1/conversations/"):
             conversation, suffix, _ = self.conversation_route()
             while self.state.hold_messages.is_set():
@@ -189,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.authorised():
+            if self.path.startswith("/v1/projects"):
+                return self.project_route("DELETE")
             self.state.deleted.append(self.path)
             conversation, _, _ = self.conversation_route()
             self.state.conversations.pop(conversation, None)
@@ -199,6 +306,12 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         if not self.authorised():
             return
+        if self.path.startswith("/v1/projects"):
+            return self.project_route("PATCH", body)
+        if self.path == "/v1/settings":
+            self.state.settings_patches.append(body)
+            self.state.notify_after = body["notify_after"]
+            return self.reply(200, self.settings_payload())
         conversation, _, _ = self.conversation_route()
         info = self.state.conversations.get(conversation)
         if info is None:
@@ -208,6 +321,8 @@ class Handler(BaseHTTPRequestHandler):
             info["title"], info["titled_by"] = body["title"], "person" if body["title"] else ""
         if body.get("pinned") is not None:
             info["pinned"] = body["pinned"]
+        if "project" in body:
+            info["project"] = body["project"]
         self.reply(200, info)
 
     def do_POST(self):
@@ -220,6 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"token": USER_TOKEN, "user": {"name": body["username"].lower()}, "surface": "app"})
         if not self.authorised():
             return
+        if self.path.startswith("/v1/projects"):
+            return self.project_route("POST", body)
         if self.path == "/v1/notifications":
             self.state.notifications.append(body)
             return self.reply(201, {"id": len(self.state.notifications), "targets": body.get("targets", [])})
@@ -253,6 +370,7 @@ class Handler(BaseHTTPRequestHandler):
             if conversation not in self.state.conversations:
                 self.state.add_conversation(conversation)
                 self.state.conversations[conversation]["preview"] = body["message"][:300]
+                self.state.conversations[conversation]["project"] = body.get("project")
             self.state.conversations[conversation]["updated_at"] = now()
             self.state.messages[conversation] += [
                 {"role": "user", "content": body["message"]},

@@ -1,5 +1,5 @@
 """The list of conversations at the side of the window, as in other chat apps: a new chat, a search, the
-conversations (pinned ones first, then by day), and a menu to rename, pin or delete one.
+conversations (pinned ones first, then by day), and a menu to rename, pin, move to a project or delete one.
 
 The panel only shows and asks: the window talks to the server and gives it the list again.
 """
@@ -47,6 +47,7 @@ class HistoryPanel(QWidget):
     search_changed = Signal(str)  # once the user has stopped typing
     rename_requested = Signal(str)
     pin_requested = Signal(str, bool)
+    move_requested = Signal(str)  # to another project, or out of its own
     delete_requested = Signal(str)
 
     def __init__(self):
@@ -67,7 +68,7 @@ class HistoryPanel(QWidget):
         self.search.textChanged.connect(self._search_timer.start)
 
         self.list = QListWidget()
-        self.list.setToolTip("Right-click a conversation to rename, pin or delete it")
+        self.list.setToolTip("Right-click a conversation to rename, pin, move or delete it")
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setTextElideMode(Qt.TextElideMode.ElideRight)  # a long title ends with "…"
         self.list.setWordWrap(False)
@@ -174,6 +175,7 @@ class HistoryPanel(QWidget):
         pinned = bool(self.conversations.get(conversation, {}).get("pinned"))
         menu.addAction("Rename…", lambda: self.rename_requested.emit(conversation))
         menu.addAction("Unpin" if pinned else "Pin", lambda: self.pin_requested.emit(conversation, not pinned))
+        menu.addAction("Move to a project…", lambda: self.move_requested.emit(conversation))
         menu.addSeparator()
         menu.addAction("Delete…", lambda: self.delete_requested.emit(conversation))
         return menu

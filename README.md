@@ -18,6 +18,16 @@ put it away. The app keeps running in the tray.
   it off. Clara sees only the files you attach. All the documents of one message can hold about 150 000
   characters (a few dozen pages); the server also refuses a message that takes more than half of the
   model's context window.
+- **Projects**: files, folders and GitHub repositories Clara uses in every conversation of the project, with
+  instructions of their own. They are kept by the server, so they are the same here and on the web site. The
+  **Project** list above the conversation chooses where your chats go: a new chat starts in that project, and ☰
+  lists its conversations (*No project*: those in none). **Projects…** opens a dialog to make, rename, describe,
+  instruct and delete projects, and fill them: *Add files…* (text, code, PDF, Word, `.zip`), *Add a folder…* (its
+  text files, leaving out `node_modules`, `.venv`, `.git`, build output, images…), *GitHub…* (the server downloads
+  a repository; *Sync* gets its latest version), and remove a file or a repository; double-click a file to read
+  it. *New chat in this project* starts one there. Right-click a conversation in ☰, **Move to a project…**, to put
+  it in another project or in none. Files are read **by the server**, not on this computer (unlike the 📎
+  attachments of one message).
 - **Reminders** (`/remind` in `clara-chat` or the console, or "remind me…" to Clara) are yours only: they
   pop up as a Windows notification even when the window is hidden, when they were set for every client of
   yours or for the app (`@app`; Clara picks this herself when you say "on my desktop"). The notification
@@ -69,8 +79,8 @@ as the account they were set from.
 | **Stop** (the Send button while Clara writes) | stop the answer; what has arrived is kept |
 | **☰** | show / hide your conversations |
 | **New chat** | start a new conversation; the one shown stays in the list |
-| right click in the list | rename, pin / unpin, delete (erased on the server; what Clara knows about you stays) |
-| **Settings** | change server, token, name |
+| right click in the list | rename, pin / unpin, move to a project, delete (erased on the server; what Clara knows about you stays) |
+| **Settings** | change server, token, name, and when you are notified that a task is done (like the server, never, or after a number of seconds; kept by the server, so every client of yours follows it) |
 | left click on the icon | show / hide the window |
 | double click on the icon | open the window |
 
