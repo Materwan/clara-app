@@ -6,7 +6,7 @@ the tray, where reminders and notifications reach you.
 
 The window is the web site's: a rail of Prussian blue on the left with Clara's portrait, a **New chat** button, the
 pages you work in (*Chat, Projects, Tasks, Files*), your conversations, and you at the bottom; the page beside it. It
-follows Windows' light or dark setting (or your choice, on the Account page) and uses the site's two fonts. Below
+keeps your conversations in the rail on every page you work in (not on the settings pages), follows Windows' light or dark setting (or your choice, on the Account page) and uses the site's two fonts. Below
 about 780 pixels wide the rail slides in over the page, behind a menu button, so the window can also be a narrow one.
 
 - **Chat**: your messages in a violet-tinted bubble on the right, Clara's answers (Markdown, formulas) on the left
@@ -22,14 +22,16 @@ about 780 pixels wide the rail slides in over the page, behind a menu button, so
   looks in titles and messages. Clara titles a conversation after its first answer. While she writes, the list waits:
   an answer is kept only once it is complete.
 - **Projects**: files, folders and GitHub repositories Clara uses in every conversation of the project, with
-  instructions of their own, kept by the server (the same here and on the web site). *New project*, then *Add files…*
+  instructions of their own, kept by the server (the same here and on the web site). The projects are cards; a click opens
+  the project's page (a way back, what it is about, its conversations, its files). *Add files…*
   (text, code, PDF, Word, `.zip`), *Add a folder…*, *GitHub…* (the server downloads a repository; *Sync* gets its
   latest version); double-click a file to read it. **New chat in this project** starts a chat there: that is how a
   chat gets into a project (or move one from the rail).
 - **Tasks**: your to-do list, the same on the web site, in the terminal and in every chat with Clara ("add a task: send
-  the invoice by Friday"). Each task shows how many reminders were sent and the next one; a task without a reminder gets
+  the invoice by Friday"), as a list (tick the round box to finish a task, click it to edit it in a dialog) or a month
+  calendar of deadlines and reminders. Each task shows how many reminders were sent and the next one; a task without a reminder gets
   them chosen by Clara, who moves the next ones each time one is sent, so the page reads the list again every 30 seconds.
-- **Files**: the Markdown files Clara wrote for you, to read (rendered or as Markdown), copy, save or delete.
+- **Files**: the Markdown files Clara wrote for you, one row each: click a name to read it (rendered or as Markdown), or copy, save or delete it.
 - **QCM**: a quiz or a questionnaire from Clara appears in the conversation with radio buttons, check boxes or a text
   box; **Send answers** sends them as your next message and a graded form then shows your score and her explanations.
 - **Formulas**: Clara writes LaTeX (`$x^2$`, `\(x^2\)`, `$$…$$`, `\[…\]`) and the app typesets it with KaTeX (the files
@@ -116,8 +118,7 @@ Closing the window does not stop the app: use **Quit** in the tray menu.
   for the answers written in this session only: the server does not keep the tool calls with the messages.
 - It runs no tools on your computer (files, shell...): Clara reads only the documents you attach, and
   cannot open a file by herself. The server's own tools (`remember`, `remind`, `notify`...) work.
-- The Tasks page is a list with its form, not the web site's month calendar; Projects is a list with its detail, not
-  cards. A scanned PDF (images of pages) has no text to read: there is no OCR.
+- A scanned PDF (images of pages) has no text to read: there is no OCR.
 - Windows only for the start-up entry; the rest is Qt and should run elsewhere, but the tray is
   only tested on Windows 11.
 

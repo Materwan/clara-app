@@ -234,6 +234,8 @@ def test_the_files_clara_wrote_are_read_and_deleted(qt, config, server, monkeypa
     state.routes[("DELETE", "/v1/markdown-files/")] = lambda b, q, p: (files.clear() or {"deleted": True})
     window = make_window(qt, config)
     page = open_page(window, "files")
+    wait_until(lambda: page.files)
+    page.open_file(1)  # a click on its name
     wait_until(lambda: page.file is not None)
     assert page.name.text() == "notes.md" and "Notes" in page.preview.toPlainText() and "# Notes" in page.source.toPlainText()
     page.mode.select("source")
@@ -241,7 +243,7 @@ def test_the_files_clara_wrote_are_read_and_deleted(qt, config, server, monkeypa
     assert page.stack.currentWidget() is page.source
     monkeypatch.setattr("clara_app.files_page.confirm", lambda *args, **kwargs: True)
     page.delete()
-    wait_until(lambda: page.pages.currentWidget() is page.empty)
+    wait_until(lambda: not page.files and not page.empty.isHidden())
     window.quit_for_good()
 
 
@@ -369,3 +371,73 @@ def test_a_dialog_signs_a_discord_account_in_as_a_user(qt, config, server):
     dialog._search()
     assert dialog.chosen == {"user_id": "1234", "display_name": "Discord id 1234"}
     dialog.done(QDialog.DialogCode.Rejected)
+
+
+# ---- the work pages, as on the web site ----------------------------------------------------------------------------------
+
+
+def test_the_conversations_stay_in_the_rail_on_the_work_pages_but_not_on_the_settings_pages(qt, config, server):
+    _, state = server
+    state.add_conversation("app:tester:a", ("hello", "hi"), title="Tea")
+    window = make_window(qt, config)
+    window.start_history()
+    for name in ("chat", "projects", "tasks", "files"):
+        window.go(name)
+        assert not window.history.isHidden(), name
+    for name in ("memory", "account"):
+        window.go(name)
+        assert window.history.isHidden(), name
+    window.go("chat")
+    assert not window.history.isHidden()
+    window.quit_for_good()
+
+
+def test_projects_are_cards_that_open_their_own_page_with_their_chats(qt, config, server):
+    _, state = server
+    thesis = state.add_project("Thesis", **{"notes.md": "chapters"})
+    state.add_project("Clara")
+    state.add_conversation("app:tester:a", ("outline", "ok"), title="Outline")
+    state.conversations["app:tester:a"]["project"] = thesis["id"]
+    window = make_window(qt, config)
+    window.start_history()
+    page = open_page(window, "projects")
+    wait_until(lambda: len(page._cards) == 2 and page.stack.currentWidget() is page.grid_page)
+    wait_until(lambda: window.history.conversations)
+    page._cards[0].clicked.emit()  # a click on the card of Thesis
+    wait_until(lambda: page.stack.currentWidget() is page.detail and page.project is not None)
+    assert page.project_title.text() == "Thesis" and page.files.count() == 1
+    from PySide6.QtWidgets import QPushButton
+
+    assert [b.text().split("  ")[0] for b in page.chats_panel.findChildren(QPushButton)] == ["Outline"]  # the project's chats, on its page
+    page.close_project()
+    assert page.stack.currentWidget() is page.grid_page
+    window.quit_for_good()
+
+
+def test_the_calendar_places_deadlines_and_reminders_on_their_days():
+    from clara_app.calendar_view import events_of
+
+    tasks = [
+        {"id": 1, "title": "Invoice", "status": "open", "due_at": "2026-10-09T09:00:00+00:00", "reminders": ["2026-10-08T17:00:00+00:00", "2026-10-09T08:00:00+00:00"]},
+        {"id": 2, "title": "Done one", "status": "done", "due_at": "2026-10-09T10:00:00+00:00", "reminders": ["2026-10-09T07:00:00+00:00"]},
+    ]
+    found = events_of(tasks)
+    days = {day.isoformat(): [(e["title"], e["kind"]) for e in events] for day, events in found.items()}
+    assert sorted(days["2026-10-09"]) == [("Done one", "due"), ("Invoice", "due"), ("Invoice", "reminder")]
+    assert ("Invoice", "reminder") in days["2026-10-08"]  # a done task keeps its deadline but has no reminder to come
+    assert all(not (title == "Done one" and kind == "reminder") for events in days.values() for title, kind in events)
+
+
+def test_a_task_is_ticked_from_its_row_and_opened_in_a_dialog(qt, config, server):
+    _, state = server
+    state.add_task("Taxes", due="2026-10-30T09:00:00+00:00")
+    window = make_window(qt, config)
+    page = open_page(window, "tasks")
+    wait_until(lambda: page.list.count() == 1)
+    page.edit_task(page.tasks[0]["id"])
+    assert page.form_dialog.isVisible() and page.title.text() == "Taxes"
+    page.form_dialog.hide()
+    page.views.select("calendar")
+    page._view("calendar")
+    assert page.stack.currentIndex() == 1
+    window.quit_for_good()

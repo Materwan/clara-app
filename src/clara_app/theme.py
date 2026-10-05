@@ -107,7 +107,7 @@ QRadioButton::indicator { border-radius: 9px; }
 QRadioButton::indicator:checked { border-color: $primary; background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 $primary, stop:0.45 $primary, stop:0.55 $raised, stop:1 $raised); }
 
 QListWidget, QTreeWidget, QTableWidget { background: transparent; border: none; outline: 0; }
-QListWidget::item { padding: 6px 10px; border-radius: 8px; }
+QListWidget::item { padding: 8px 12px; border-radius: 8px; }
 QListWidget::item:hover { background: $hover; }
 QListWidget::item:selected { background: $select; color: $text; }
 QListWidget[plain="true"] { background: $raised; border: 1px solid $line; border-radius: 8px; }
@@ -182,6 +182,14 @@ QLabel#qcm-score { color: $text; font-weight: 600; }
 QLabel#qcm-verdict[ok="true"] { color: $ok; font-weight: 600; }
 QLabel#qcm-verdict[ok="false"] { color: $danger; font-weight: 600; }
 
+QFrame#cal-cell { background: transparent; border: none; border-right: 1px solid $line; border-bottom: 1px solid $line; }
+QFrame#cal-cell[other="true"] { background: $panel_2; }
+QFrame#cal-cell[selected="true"] { border: 2px solid $text; }
+QLabel#cal-num { border-radius: 13px; font-weight: 600; }
+QLabel#cal-num[today="true"] { background: $accent; color: $accent_ink; }
+QLabel#cal-chip { background: $primary; color: $primary_ink; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+QLabel#cal-chip[kind="reminder"] { background: $panel_2; color: $text_2; }
+QLabel#cal-chip[done="true"] { background: $panel_2; color: $muted; }
 QFrame#card { background: transparent; border: 1px solid $line; border-top: 2px solid $text; border-radius: 4px 4px 8px 8px; }
 QFrame#card:hover { background: $hover; border-top-color: $accent; }
 
@@ -303,7 +311,7 @@ def install(app: QApplication, preference: str = "auto") -> None:
     """Fonts, palette and style sheet for the whole application; follows Windows while the preference is "auto"."""
     load_fonts()
     font = QFont(BODY_FAMILY)
-    font.setPixelSize(14)
+    font.setPixelSize(15)
     app.setFont(font)
     hints = QGuiApplication.styleHints()
     if hints is not None:

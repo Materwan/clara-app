@@ -55,6 +55,7 @@ class Shell(QWidget):
     def __init__(self, history: QWidget, factories: dict[str, Callable[[], Page]]):
         super().__init__()
         self._factories = factories
+        self._history = history
         self.pages: dict[str, Page] = {}
         self.current = ""
         self.is_admin = False
@@ -279,6 +280,7 @@ class Shell(QWidget):
         self.title.setText(page.page_title)
         settings = name in self.tabs
         self.settings_bar.setVisible(settings)
+        self._history.setVisible(not settings)  # the conversations stay on the pages you work in
         if name in self.tabs:
             self.tabs[name].setChecked(True)
             self.me.setChecked(True)

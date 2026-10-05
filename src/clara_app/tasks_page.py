@@ -12,12 +12,16 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 from PySide6.QtCore import QDate, QDateTime, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QRect, QSize
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateTimeEdit,
     QDialog,
+    QStackedWidget,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -33,8 +37,9 @@ from PySide6.QtWidgets import (
 
 from .api import ClaraApi
 from .config import Config
-from .theme import tone
-from .widgets import Page, button as push
+from .calendar_view import CalendarView
+from .theme import THEME, tone
+from .widgets import Page, Segmented, button as push, label
 from .workers import CallWorker
 
 ID = Qt.ItemDataRole.UserRole
@@ -73,6 +78,54 @@ def summary(task: dict) -> str:
     return f"{sent} · {next_reminder}{due}"
 
 
+class TaskRows(QStyledItemDelegate):
+    """Draws a task as the web site does: a round box to tick, its title, and what is known about its reminders."""
+
+    BOX = 22
+
+    def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
+        return QSize(option.rect.width(), 74)
+
+    def box_rect(self, row: QRect) -> QRect:
+        return QRect(row.left() + 16, row.top() + 14, self.BOX, self.BOX)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        t = THEME.t
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = option.rect
+        selected = bool(option.state & option.state.State_Selected) if hasattr(option.state, "State_Selected") else False
+        hover = bool(option.state & option.state.State_MouseOver) if hasattr(option.state, "State_MouseOver") else False
+        if hover or selected:
+            painter.fillRect(rect, THEME.qcolor("hover"))
+        painter.setPen(QPen(THEME.qcolor("line"), 1))
+        painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+        title, _, meta = str(index.data(Qt.ItemDataRole.DisplayRole)).partition("\n")
+        done = bool(index.data(ID + 1))
+        box = self.box_rect(rect)
+        painter.setPen(QPen(QColor(t["text"] if done else t["line_strong"]), 2))
+        painter.setBrush(QColor(t["text"]) if done else Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(box)
+        if done:
+            painter.setPen(QPen(QColor(t["bg"]), 2.2))
+            painter.drawLine(box.left() + 6, box.center().y(), box.left() + 10, box.bottom() - 6)
+            painter.drawLine(box.left() + 10, box.bottom() - 6, box.right() - 5, box.top() + 7)
+        left = box.right() + 14
+        font = QFont(option.font)
+        font.setPixelSize(16)
+        font.setWeight(QFont.Weight.DemiBold)
+        font.setStrikeOut(done)
+        painter.setFont(font)
+        painter.setPen(QColor(t["muted"] if done else t["text"]))
+        painter.drawText(QRect(left, rect.top() + 11, rect.right() - left - 12, 24), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine, title)
+        small = QFont(option.font)
+        small.setPixelSize(13)
+        painter.setFont(small)
+        painter.setPen(QColor(t["muted"]))
+        painter.drawText(QRect(left, rect.top() + 38, rect.right() - left - 12, 22), Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextSingleLine, meta)
+        painter.restore()
+
+
 class TasksPage(Page):
     changed = Signal()  # a task was added, changed or deleted
 
@@ -108,19 +161,23 @@ class TasksPage(Page):
         for label, status in FILTERS:
             self.filter.addItem(label, status)
         self.filter.currentIndexChanged.connect(lambda *_: self._fill_list())
+        self.filter.hide()  # the choice the page keeps; the segments below set it
         self.list = QListWidget()
-        self.list.setMinimumWidth(300)
-        self.list.setWordWrap(True)  # a task's second line is long: it wraps instead of scrolling sideways
+        self.list.setItemDelegate(TaskRows(self.list))
+        self.list.setMouseTracking(True)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.currentItemChanged.connect(self._picked)
+        self.list.viewport().installEventFilter(self)
         self.new_button = push("New task", "primary", self.start_new)
         self.count = QLabel("")
         tone(self.count, "muted")
-        left = QVBoxLayout()
-        left.addWidget(self.filter)
-        left.addWidget(self.list, 1)
-        left.addWidget(self.count)
-        left.addWidget(self.new_button)
+        self.calendar = CalendarView()
+        self.calendar.task_clicked.connect(self.edit_task)
+        self.filters = Segmented([(status, text) for text, status in FILTERS], "open")
+        self.filters.chosen.connect(lambda status: self.filter.setCurrentIndex(self.filter.findData(status)))
+        self.views = Segmented([("list", "List"), ("calendar", "Calendar")], "list")
+        self.views.chosen.connect(self._view)
 
         self.title = QLineEdit()
         self.title.setMaxLength(200)
@@ -182,25 +239,52 @@ class TasksPage(Page):
         self.status.setWordWrap(True)
         tone(self.status, "muted")
 
+        # the form is a dialog, as on the web site: opened by a task, or by "New task"
+        self.form_dialog = QDialog(self)
+        self.form_dialog.setMinimumWidth(520)
         self.detail = QWidget()
         right = QVBoxLayout(self.detail)
         right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(12)
         right.addLayout(form)
         right.addWidget(self.hint)
         right.addWidget(self.info)
-        right.addStretch(1)
         right.addLayout(buttons)
+        outer = QVBoxLayout(self.form_dialog)
+        outer.addWidget(self.detail)
+        self.form_dialog.finished.connect(self._form_closed)
 
-        body = QHBoxLayout()
-        body.setSpacing(18)
-        body.addLayout(left)
-        body.addWidget(self.detail, 1)
+        self.list_panel = QWidget()
+        panel = QVBoxLayout(self.list_panel)
+        panel.setContentsMargins(0, 0, 0, 0)
+        panel.addWidget(self.list)
+        panel.addStretch(1)
+        self.empty = QLabel("")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tone(self.empty, "muted")
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.list_panel)
+        calendar_holder = QWidget()
+        calendar_column = QVBoxLayout(calendar_holder)
+        calendar_column.setContentsMargins(0, 0, 0, 0)
+        calendar_column.addWidget(self.calendar)
+        calendar_column.addStretch(1)
+        self.stack.addWidget(calendar_holder)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(self.filters)
+        toolbar.addWidget(self.views)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.count)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 18, 24, 16)
         layout.setSpacing(14)
         layout.addWidget(intro)
-        layout.addLayout(body, 1)
+        layout.addLayout(toolbar)
+        layout.addWidget(self.stack, 1)
+        layout.addWidget(self.empty)
         layout.addWidget(self.status)
+        self.changed.connect(self.form_dialog.hide)
 
         self._timer = QTimer(self)
         self._timer.setInterval(REFRESH_MS)
@@ -248,7 +332,38 @@ class TasksPage(Page):
         tone(self.status, "bad" if bad else "muted")
 
     def actions(self) -> list[QWidget]:
-        return []
+        return [self.new_button]
+
+    def eventFilter(self, watched, event) -> bool:
+        """A click on the round box of a row ticks the task; a click elsewhere on it opens the task."""
+        from PySide6.QtCore import QEvent
+
+        if watched is self.list.viewport() and event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            item = self.list.itemAt(event.position().toPoint())
+            if item is not None:
+                task = next((t for t in self.tasks if t["id"] == item.data(ID)), None)
+                if task is not None:
+                    box = self.list.itemDelegate().box_rect(self.list.visualItemRect(item)).adjusted(-6, -6, 6, 6)
+                    if box.contains(event.position().toPoint()):
+                        self._show(task)
+                        self.toggle_done()
+                    else:
+                        self.edit_task(task["id"])
+        return super().eventFilter(watched, event)
+
+    def _view(self, key: str) -> None:
+        self.stack.setCurrentIndex(0 if key == "list" else 1)
+
+    def edit_task(self, task_id: int) -> None:
+        """Open a task in the form."""
+        task = next((t for t in self.tasks if t["id"] == task_id), None)
+        if task is not None:
+            self._show(task)
+            self.form_dialog.setWindowTitle("Task")
+            self.form_dialog.open()
+
+    def _form_closed(self) -> None:
+        self.list.clearSelection()
 
     def activated(self) -> None:
         self.reload()
@@ -319,8 +434,7 @@ class TasksPage(Page):
         for task in shown:
             item = QListWidgetItem(f"{task['title']}\n{summary(task)}")
             item.setData(ID, task["id"])
-            if task["status"] == "done":
-                item.setForeground(QBrush(QColor("gray")))
+            item.setData(ID + 1, task["status"] == "done")
             self.list.addItem(item)
             if task["id"] == select:
                 chosen = item
@@ -329,6 +443,10 @@ class TasksPage(Page):
         self.list.blockSignals(False)
         open_count = sum(1 for t in self.tasks if t["status"] == "open")
         self.count.setText(plural(open_count, "open task") if self.tasks else "No task yet")
+        self.list.setFixedHeight(74 * len(shown) + 2 if shown else 0)
+        self.empty.setText("" if shown else {"done": "Nothing is done yet. Finished tasks stay here.", "open": "No task yet. Add one with New task, or tell Clara in a chat: “add a task: send the invoice by Friday”."}.get(status, "No task yet."))
+        self.empty.setVisible(not shown)
+        self.calendar.set_tasks(shown)
 
     def _clean(self, task: dict) -> bool:
         """Is the form as the server has the task (nothing typed, nothing chosen)?"""
@@ -352,6 +470,8 @@ class TasksPage(Page):
         self.list.setCurrentItem(None)
         self.list.blockSignals(False)
         self._show(None)
+        self.form_dialog.setWindowTitle("New task")
+        self.form_dialog.open()
         self.title.setFocus()
 
     def _show(self, task: dict | None) -> None:

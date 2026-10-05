@@ -184,7 +184,7 @@ def test_a_task_is_marked_done_reopened_and_deleted(qt, config, server, monkeypa
     assert state.tasks
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
     dialog.delete()
-    wait_until(lambda: not state.tasks and dialog.task is None)
+    wait_until(lambda: not state.tasks and dialog.task is None and dialog.status.text() == "Deleted.")
     assert dialog.status.text() == "Deleted." and titles(dialog) == []
     dialog.shutdown()
 

@@ -9,12 +9,14 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -24,6 +26,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,8 +36,9 @@ from PySide6.QtWidgets import (
 from .api import ClaraApi
 from .config import Config
 from .projects import FILTER, Entry, Sent, file_entries, folder_entries, send, size_text
+from .icons import bind_icon, portrait_label
 from .theme import tone
-from .widgets import Page, button as push
+from .widgets import Page, Panel, ago, button as push, divider, label
 from .workers import CallWorker
 
 ID = Qt.ItemDataRole.UserRole
@@ -64,6 +70,39 @@ class UploadWorker(QThread):
         result.skipped = skipped + result.skipped
         result.skipped_count += len(skipped)
         self.sent.emit(result)
+
+
+class ProjectCard(QFrame):
+    """A project as the web site shows it: its name, what it is about, and how big it is. A click opens it."""
+
+    clicked = Signal()
+
+    def __init__(self, project: dict):
+        super().__init__()
+        self.setObjectName("card")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(140)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(18, 16, 18, 14)
+        column.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        glyph = QToolButton()
+        glyph.setEnabled(False)
+        bind_icon(glyph, "folder", "text", 20)
+        glyph.setStyleSheet("QToolButton { background: palette(alternate-base); border-radius: 8px; padding: 6px; }")
+        head.addWidget(glyph)
+        head.addWidget(label(project["name"], heading="section"), 1)
+        column.addLayout(head)
+        about = label(project.get("description") or "No description", tone_="" if project.get("description") else "muted", wrap=True)
+        about.setMaximumHeight(60)
+        column.addWidget(about, 1)
+        column.addWidget(label(f"{plural(project['files'], 'file')}   {plural(project['conversations'], 'chat')}   updated {ago(project.get('updated_at'))}", tone_="muted"))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class RepositoryDialog(QDialog):
@@ -127,24 +166,22 @@ class ProjectsPage(Page):
         intro.setWordWrap(True)
         tone(intro, "muted")
 
-        self.list = QListWidget()
-        self.list.setFixedWidth(240)
+        self.list = QListWidget()  # the projects as the server lists them; the cards are drawn from it
+        self.list.hide()
         self.list.currentItemChanged.connect(self._picked)
         self.new_button = push("New project", "primary", self.create)
         self.delete_button = push("Delete…", "danger", self.delete)
-        left = QVBoxLayout()
-        left.addWidget(self.list, 1)
-        left.addWidget(self.new_button)
-        left.addWidget(self.delete_button)
+        self._cards: list[ProjectCard] = []
+        self._opening_detail = False  # the next project loaded is opened on its own page
 
         self.name = QLineEdit()
         self.name.setMaxLength(100)
         self.description = QPlainTextEdit()
         self.description.setPlaceholderText("What is it about?")
-        self.description.setFixedHeight(54)
+        self.description.setFixedHeight(76)
         self.instructions = QPlainTextEdit()
         self.instructions.setPlaceholderText("How Clara should work in this project: language, conventions, focus…")
-        self.instructions.setFixedHeight(96)
+        self.instructions.setFixedHeight(120)
         for field in (self.name, self.description, self.instructions):
             field.textChanged.connect(self._edited)
         self.save_button = push("Save", "primary", self.save)
@@ -154,8 +191,8 @@ class ProjectsPage(Page):
         form.addRow("Name:", self.name)
         form.addRow("Description:", self.description)
         form.addRow("Instructions:", self.instructions)
+        self.chat_button.setProperty("kind", "primary")
         edit_row = QHBoxLayout()
-        edit_row.addWidget(self.chat_button)
         edit_row.addStretch(1)
         edit_row.addWidget(self.save_button)
 
@@ -208,8 +245,8 @@ class ProjectsPage(Page):
         self.status = QLabel("")
         self.status.setWordWrap(True)
         tone(self.status, "muted")
-        files_box = QGroupBox("Files")
-        files_layout = QVBoxLayout(files_box)
+        files_box = Panel("Files", "Text, code, PDF and Word files, folders, and GitHub repositories Clara reads in this project.")
+        files_layout = files_box.body
         files_layout.addWidget(self.summary)
         files_layout.addLayout(add_row)
         files_layout.addWidget(self.sources_box)
@@ -220,33 +257,102 @@ class ProjectsPage(Page):
         bottom.addWidget(self.remove_file_button)
         files_layout.addLayout(bottom)
 
+        # the page of one project: a way back, what it is about, its chats, and its files
+        self.back_button = QToolButton()
+        self.back_button.setToolTip("All projects")
+        bind_icon(self.back_button, "back", "muted", 20)
+        self.back_button.clicked.connect(self.close_project)
+        self.project_title = label("", heading="page")
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(self.back_button)
+        head.addWidget(self.project_title, 1)
+        head.addWidget(self.chat_button)
+        head.addWidget(self.delete_button)
+        about = Panel("About", "Its name, what it is for, and how Clara should work in it.")
+        about.add(form)
+        about.add(edit_row)
+        self.chats_panel = Panel("Conversations")
+        self.chats_panel.body.setSpacing(0)
+        self.chats_panel.body.setContentsMargins(0, 0, 0, 6)
+        left = QVBoxLayout()
+        left.setSpacing(16)
+        left.addWidget(about)
+        left.addWidget(self.chats_panel)
+        left.addStretch(1)
+        columns = QHBoxLayout()
+        columns.setSpacing(18)
+        columns.addLayout(left, 1)
+        columns.addWidget(files_box, 1)
         self.detail = QWidget()
-        right = QVBoxLayout(self.detail)
-        right.setContentsMargins(0, 0, 0, 0)
-        right.addLayout(form)
-        right.addLayout(edit_row)
-        right.addWidget(files_box, 1)
+        detail = QVBoxLayout(self.detail)
+        detail.setContentsMargins(24, 18, 24, 16)
+        detail.setSpacing(16)
+        detail.addLayout(head)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inside = QWidget()
+        inside.setObjectName("scroll-body")
+        inside.setLayout(columns)
+        scroll.setWidget(inside)
+        detail.addWidget(scroll, 1)
 
-        body = QHBoxLayout()
-        body.setSpacing(18)
-        body.addLayout(left)
-        body.addWidget(self.detail, 1)
+        # the page of all projects: cards
+        self.grid = QGridLayout()
+        self.grid.setSpacing(16)
+        self.empty = QWidget()
+        self.empty_box = QVBoxLayout(self.empty)
+        grid_page = QWidget()
+        grid_column = QVBoxLayout(grid_page)
+        grid_column.setContentsMargins(24, 18, 24, 16)
+        grid_column.setSpacing(14)
+        grid_column.addWidget(intro)
+        grid_column.addLayout(self.grid)
+        grid_column.addWidget(self.empty)
+        grid_column.addStretch(1)
+        self.grid_page = QScrollArea()
+        self.grid_page.setWidgetResizable(True)
+        self.grid_page.setFrameShape(QFrame.Shape.NoFrame)
+        grid_page.setObjectName("scroll-body")
+        self.grid_page.setWidget(grid_page)
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.grid_page)
+        self.stack.addWidget(self.detail)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 18, 24, 16)
-        layout.setSpacing(14)
-        layout.addWidget(intro)
-        layout.addLayout(body, 1)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.stack)
 
+        self.new_button_header = push("New project", "primary", self.create)
         self.changed.connect(self._told_host)
         self.chat_requested.connect(self._chat_in)
         self._show(None)
         self.reload()
 
     def actions(self) -> list[QWidget]:
-        return []
+        return [self.new_button_header]
 
     def activated(self) -> None:
         self.reload()
+
+    def close_project(self) -> None:
+        self.stack.setCurrentWidget(self.grid_page)
+
+    def _open_card(self, project_id: int) -> None:
+        self._opening_detail = True
+        self.reload(select=project_id)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._layout_cards()
+
+    def _layout_cards(self) -> None:
+        columns = max(1, (self.width() - 48 + 16) // 316)
+        for index, card in enumerate(self._cards):
+            self.grid.addWidget(card, index // columns, index % columns)
+        for column in range(columns):
+            self.grid.setColumnStretch(column, 1)
 
     def _told_host(self) -> None:
         if self._host is not None:
@@ -342,11 +448,34 @@ class ProjectsPage(Page):
             if project["id"] == wanted:
                 chosen = item
         self.list.blockSignals(False)
+        self._draw_cards(projects)
         if not projects:
             self._show(None)
             self._say("No project yet: make one with New project…")
             return
-        self.list.setCurrentItem(chosen or self.list.item(0))
+        if chosen is not None:
+            self.list.setCurrentItem(chosen)
+
+    def _draw_cards(self, projects: list[dict]) -> None:
+        for card in self._cards:
+            self.grid.removeWidget(card)
+            card.hide()
+            card.deleteLater()
+        self._cards = []
+        for project in projects:
+            card = ProjectCard(project)
+            card.clicked.connect(lambda _=False, i=project["id"]: self._open_card(i))
+            self._cards.append(card)
+        while self.empty_box.count():
+            item = self.empty_box.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        if not projects:
+            from .widgets import EmptyState
+
+            self.empty_box.addWidget(EmptyState("No project yet", "Make one with New project, then give it files, folders or a GitHub repository."))
+        self.empty.setVisible(not projects)
+        self._layout_cards()
 
     def _picked(self, item: QListWidgetItem | None, _previous=None) -> None:
         if item is None:
@@ -360,6 +489,31 @@ class ProjectsPage(Page):
             self._say(error, bad=True)
             return
         self._show(project)
+        if self._opening_detail:
+            self._opening_detail = False
+            self.stack.setCurrentWidget(self.detail)
+
+    def _fill_chats(self, project: dict | None) -> None:
+        """The conversations of the project, on its page: a click goes to the chat on that conversation."""
+        body = self.chats_panel.body
+        while body.count():
+            item = body.takeAt(0)
+            if item.widget() is not None:
+                item.widget().hide()
+                item.widget().deleteLater()
+        known = self._host.history.conversations.values() if self._host is not None and project is not None else []
+        chats = sorted((c for c in known if c.get("project") == (project or {}).get("id")), key=lambda c: c["updated_at"], reverse=True)
+        if not chats:
+            body.addWidget(label("  No conversation yet. Start one with New chat in this project.", tone_="muted", wrap=True))
+            return
+        from .history import display_title
+
+        for position, chat in enumerate(chats):
+            if position:
+                body.addWidget(divider())
+            row = push(f"{display_title(chat)}      {ago(chat.get('updated_at'))}", "ghost", lambda _=False, c=chat["id"]: self._host.open_conversation(c))
+            row.setStyleSheet("text-align: left; padding: 10px 18px; border-radius: 0;")
+            body.addWidget(row)
 
     def items(self) -> list[str]:
         """The names listed, for tests."""
@@ -380,6 +534,8 @@ class ProjectsPage(Page):
 
     def _show(self, project: dict | None) -> None:
         """Show a project as the server described it (None: nothing to show)."""
+        self.project_title.setText((project or {}).get("name", ""))
+        self._fill_chats(project)
         same = project is not None and self.project is not None and project["id"] == self.project["id"]
         self.project = project
         if project is None:
@@ -391,6 +547,7 @@ class ProjectsPage(Page):
             self.sources.clear()
             self.files.clear()
             self.sources_box.hide()
+            self.stack.setCurrentWidget(self.grid_page)
             self._enable()
             return
         if not same or not self._dirty():  # what the user is typing is not thrown away by an upload
@@ -467,6 +624,7 @@ class ProjectsPage(Page):
                 self._say(error, bad=True)
                 return
             self.changed.emit()
+            self._opening_detail = True  # a new project opens on its own page
             self.reload(select=project["id"])
 
         self._call(lambda api: api.create_project(name.strip()), made)
