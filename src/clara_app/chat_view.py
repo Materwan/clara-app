@@ -5,6 +5,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
+from . import mathview
+
 USER, CLARA, NOTE, ERROR = "user", "clara", "note", "error"
 BUBBLE_SHARE = 0.84  # widest a bubble gets, as a share of the window
 STICK_MARGIN = 24  # pixels from the bottom within which the view keeps following new text
@@ -36,14 +38,28 @@ class MessageBubble(QFrame):
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
         padding = 4 if role == NOTE else 10
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(padding + 2, padding, padding + 2, padding)
-        layout.addWidget(self.label)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(padding + 2, padding, padding + 2, padding)
+        self._layout.addWidget(self.label)
+        self.math: mathview.MathView | None = None  # shows the text instead of the label when it has formulas
         self.set_text(text)
+        self.settle()
 
     def set_text(self, text: str) -> None:
         self.text = text
-        self.label.setText(text if text else "…")  # a reply still being awaited shows as "…"
+        if self.math is not None:
+            self.math.set_text(text)
+        else:
+            self.label.setText(text if text else "…")  # a reply still being awaited shows as "…"
+
+    def settle(self) -> None:
+        """Clara's text is complete (or was read back): when it holds formulas a web view typesets it. While it
+        streams in it stays a label, with the formulas as source: the page would be loaded at each piece."""
+        if self.role != CLARA or self.math is not None or not mathview.available() or not mathview.has_math(self.text):
+            return
+        self.math = mathview.MathView(self.text, parent=self)
+        self._layout.replaceWidget(self.label, self.math)
+        self.label.hide()
 
 
 class ChatView(QScrollArea):

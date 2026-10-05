@@ -368,6 +368,8 @@ class ChatWindow(QMainWindow):
         self._flush()
         if self._reply is not None and not self._reply_text:
             self.view.remove(self._reply)  # cancelled before the first word
+        elif self._reply is not None:
+            self._reply.settle()  # a text with formulas is now typeset
         self._reply = None
         self._set_busy(False)
         worker.deleteLater()

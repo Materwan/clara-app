@@ -32,6 +32,12 @@ put it away. The app keeps running in the tray.
   radio buttons (one answer), check boxes (several) or a text box, and **Send answers** sends them as your next
   message. When Clara gave the right answers the card then shows your score, what was right and wrong, and her
   explanations. A conversation opened again shows its forms, answered ones with your choices.
+- **Formulas**: Clara writes LaTeX (`$x^2$`, `\(x^2\)`, `$$…$$`, `\[…\]`) and the app typesets it with KaTeX
+  (the files are in `clara_app/katex/`, the same as the web site's), in her answers and in QCM questions, options
+  and explanations. A message that holds a formula is shown by a small embedded web view (Qt WebEngine); the
+  others stay ordinary labels, which are lighter. The view loads nothing but the local KaTeX files: no network,
+  and raw HTML in an answer is shown as text. While an answer streams in, its formulas show as source; they are
+  typeset when it is complete. What you type is not typeset.
 - **Reminders** (`/remind` in `clara-chat` or the console, or "remind me…" to Clara) are yours only: they
   pop up as a Windows notification even when the window is hidden, when they were set for every client of
   yours or for the app (`@app`; Clara picks this herself when you say "on my desktop"). The notification
@@ -121,6 +127,7 @@ src/clara_app/
                     and taking them out of a message shown again
   chat_view.py      the conversation: bubbles rendered as Markdown
   qcm.py            the card of a QCM Clara asks, and the message of its answers
+  mathview.py       text with formulas: Markdown to HTML, and the web view that typesets it with KaTeX
   settings_dialog.py  server / token / identity, with a connection test
   api.py            the Clara server over HTTP (Qt-free, blocking)
   workers.py        threads: one reply, the reminder / notification / server-state stream, reading

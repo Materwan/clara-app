@@ -30,7 +30,9 @@ INSTRUCTIONS = (
     "The user can attach files (PDF, code, Markdown, text): their content comes in the message, each inside "
     '<document name="..." type="..."> tags. Refer to them by name. '
     "To quiz the user or to collect several answers at once, call the qcm tool: the app shows it as a form "
-    "(radio buttons, check boxes or a text box) and their answers come back in their next message."
+    "(radio buttons, check boxes or a text box) and their answers come back in their next message. "
+    "Write mathematical formulas in LaTeX: $...$ inline and $$...$$ on their own lines (they are typeset, in "
+    "answers and in the QCM)."
 )
 
 

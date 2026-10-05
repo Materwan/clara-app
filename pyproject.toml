@@ -16,6 +16,7 @@ dependencies = [
     "PySide6>=6.6",
     "httpx>=0.27",
     "pypdf>=4.0",  # the text of attached PDF documents
+    "markdown-it-py>=3.0",  # Clara's answers with formulas: Markdown to HTML, for the web view that typesets them
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,9 @@ clara-app = "clara_app.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+clara_app = ["katex/*", "katex/fonts/*"]  # KaTeX, which typesets formulas (the same files as the web site)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

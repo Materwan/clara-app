@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import mathview
+
 LETTERS = "ABCDEFGHIJ"
 NO_ANSWER = "(no answer)"
 _MARK = re.compile(r"^\[QCM answers [0-9a-f]{8}\] ?([^\n]*)")
@@ -65,12 +67,15 @@ def grade(form: dict, answers: list) -> tuple[int, int]:
 
 
 STYLE = """
+QLabel { color: palette(text); }
 QFrame#qcm { background: palette(base); border: 1px solid palette(mid); border-radius: 12px; }
 QLabel#qcm-title { font-weight: 700; font-size: 14px; }
 QLabel#qcm-question { font-weight: 600; }
+QLabel#qcm-letter { color: palette(placeholder-text); font-weight: 700; }
 QLabel#qcm-hint, QLabel#qcm-progress, QLabel#qcm-score { color: palette(placeholder-text); }
 QLabel#qcm-score { color: palette(text); font-weight: 600; }
 QLabel#qcm-explain { background: palette(alternate-base); border-radius: 6px; padding: 5px 8px; }
+QFrame#qcm-explain { background: palette(alternate-base); border-radius: 6px; }
 QFrame#qcm-option { border: 1px solid palette(midlight); border-radius: 8px; }
 QFrame#qcm-option[picked="true"] { border-color: #3d5afe; }
 QFrame#qcm-option[state="right"] { background: #e3f1e4; border-color: #5fa564; }
@@ -82,18 +87,19 @@ QLabel#qcm-verdict[ok="false"] { color: #b2382b; font-weight: 600; }
 """
 
 
-class _ClickableLabel(QLabel):
-    """The text of an option, which wraps (a radio button's own text does not) and selects it when clicked."""
+class _OptionRow(QFrame):
+    """An option: its button and its text (which wraps, as a radio button's own text does not). A click anywhere on
+    the row selects it, whether the text is a label or a web view with formulas."""
 
-    def __init__(self, text: str, button: QAbstractButton):
-        super().__init__(text)
-        self._button = button
-        self.setWordWrap(True)
+    def __init__(self, button: QAbstractButton):
+        super().__init__()
+        self.button = button
+        self.setObjectName("qcm-option")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mousePressEvent(self, event) -> None:
-        if self._button.isEnabled():
-            self._button.click()
+        if self.button.isEnabled():
+            self.button.click()
         super().mousePressEvent(event)
 
 
@@ -124,10 +130,7 @@ class QcmCard(QFrame):
     def _build(self) -> None:
         total = len(self.form["questions"])
         title = self.form.get("title") or ("A question" if total == 1 else f"{total} questions")
-        heading = QLabel(f"QCM · {title}")
-        heading.setObjectName("qcm-title")
-        heading.setWordWrap(True)
-        self._column.addWidget(heading)
+        self._column.addWidget(self._rich(f"QCM · {title}", "qcm-title", extra="font-weight: 700; font-size: 14px"))
         shown = self.answers if self.answers is not None else self._draft
         for index, question in enumerate(self.form["questions"]):
             self._column.addWidget(self._question(index, question, shown[index]))
@@ -141,13 +144,37 @@ class QcmCard(QFrame):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         return label
 
+    def _rich(self, text: str, name: str, color: str | None = None, extra: str = "", markdown: str | None = None) -> QWidget:
+        """Text that may hold LaTeX formulas ($x^2$): a web view typesets it; without one, an ordinary label.
+        `markdown`: the text as the web view reads it (Markdown), when that needs escaping that a label must not have."""
+        if mathview.available() and mathview.has_math(text):
+            view = mathview.MathView(markdown or text, color=color, extra=extra)
+            view.setObjectName(name)
+            return view
+        return self._label(text, name)
+
+    def _explanation(self, text: str, lead: str = "") -> QWidget:
+        """A note under a question (the explanation, the expected answer), on a tinted background."""
+        if mathview.available() and mathview.has_math(text):
+            box = QFrame()
+            box.setObjectName("qcm-explain")
+            inside = QVBoxLayout(box)
+            inside.setContentsMargins(8, 5, 8, 5)
+            inside.addWidget(mathview.MathView(f"**{lead.strip()}** {text}" if lead else text))
+            return box
+        return self._label(lead + text, "qcm-explain")
+
     def _question(self, index: int, question: dict, given) -> QWidget:
         done = self.answers is not None
         box = QWidget()
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(4)
-        layout.addWidget(self._label(f"{index + 1}. {question['text']}", "qcm-question"))
+        number = f"{index + 1}. "
+        layout.addWidget(self._rich(
+            number + question["text"], "qcm-question", extra="font-weight: 600",
+            markdown=f"{index + 1}\\. " + question["text"],  # "1. " would be a list for Markdown
+        ))
         correct = question.get("correct")
         known = done and correct is not None and question["type"] != "text"
         if question["type"] == "multiple":
@@ -170,9 +197,9 @@ class QcmCard(QFrame):
             verdict.setProperty("ok", "true" if right else "false")
             layout.addWidget(verdict)
         if done and question.get("explanation"):
-            layout.addWidget(self._label(question["explanation"], "qcm-explain"))
+            layout.addWidget(self._explanation(question["explanation"]))
         if done and question["type"] == "text" and question.get("answer"):
-            layout.addWidget(self._label(f"Expected: {question['answer']}", "qcm-explain"))
+            layout.addWidget(self._explanation(question["answer"], "Expected: "))
         return box
 
     def _option(self, index: int, question: dict, at: int, given: list, done: bool) -> tuple[QFrame, QAbstractButton]:
@@ -181,8 +208,7 @@ class QcmCard(QFrame):
         button.setChecked(picked)
         button.setEnabled(not done)
         button.toggled.connect(lambda on, i=index, o=at: self._toggled(i, o, on))
-        row = QFrame()
-        row.setObjectName("qcm-option")
+        row = _OptionRow(button)
         row.setProperty("picked", "true" if picked else "false")
         correct = question.get("correct")
         if done and correct is not None:
@@ -191,8 +217,18 @@ class QcmCard(QFrame):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.addWidget(button)
-        text = _ClickableLabel(f"{LETTERS[at]}.  {question['options'][at]}", button)
-        text.setTextFormat(Qt.TextFormat.PlainText)
+        letter = QLabel(f"{LETTERS[at]}.")
+        letter.setObjectName("qcm-letter")
+        layout.addWidget(letter)
+        shown = question["options"][at]
+        if mathview.available() and mathview.has_math(shown):
+            dark = row.property("state") in ("right", "wrong")  # on a tinted row the text is dark in any theme
+            text: QWidget = mathview.MathView(shown, color="#1f2a20" if dark else None)
+            text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # the row takes the click
+        else:
+            text = QLabel(shown)
+            text.setWordWrap(True)
+            text.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(text, 1)
         if done and correct is not None and row.property("state") == "missed":
             layout.addWidget(QLabel("correct answer"))
