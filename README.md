@@ -104,8 +104,12 @@ Closing the window does not stop the app: use **Quit** in the tray menu.
 
 ## What it does not do (yet)
 
-- The list shows the conversations started in the app, not those of `clara-chat`, the console or Discord.
-  The single conversation of earlier versions (`app:<your id>`) is not in it; its messages stay on the server.
+- The list shows the conversations started in the app **and on the web site** (the same list there, and the same
+  projects): you can read, go on with, rename, pin, move or delete either's. While the window shows, the list and the
+  projects are read again every 30 seconds and when the window comes to the front, and the conversation shown is read
+  again if it went on elsewhere (never while Clara is writing). Those of `clara-chat`, the console or Discord are not in
+  it. The single conversation of earlier versions (`app:<your id>`) is not in it; its messages stay on the server.
+  This needs the server of this version: an older one lists only the app's own.
 - A conversation shows its last 200 messages. When older ones were deleted after a summary
   (`CLARA_PURGE_SUMMARISED` on the server), the summary is shown in their place. Attached documents show
   as their names: their text is not shown again. What Clara used to answer (the line under a reply) is shown

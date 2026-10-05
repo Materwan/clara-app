@@ -48,6 +48,7 @@ FLUSH_MS = 40  # streamed text is drawn at most this often
 MAX_INPUT_LINES = 6
 REMINDER_DUE = "[Reminder due] "  # what the server puts in a conversation when a reminder set there comes due
 WINDOW_SIZE = QSize(1120, 740)
+SYNC_MS = 30_000  # the web site shares our conversations and projects: look again this often while the window shows
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~&])")
 
@@ -138,6 +139,8 @@ class ChatWindow(QMainWindow):
         self._list_again = False  # ...and must be fetched again after that
         self._open_latest = False  # show the last conversation once the list arrives (when the app starts)
         self._titling: set[str] = set()  # conversations Clara is writing a title for
+        self._stamp: str | None = None  # when the conversation shown was last written in, as read: it may go on elsewhere
+        self._restamp = False  # our own answer just ended: the next list tells when the conversation was last written in
         self._reply: MessageBubble | None = None
         self._reply_text = ""
         self._quitting = False
@@ -238,6 +241,10 @@ class ChatWindow(QMainWindow):
         self._flush_timer.setInterval(FLUSH_MS)
         self._flush_timer.timeout.connect(self._flush)
         THEME.changed.connect(self._set_busy_icon)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(SYNC_MS)
+        self._sync_timer.timeout.connect(self.sync)
+        self._sync_timer.start()
 
         self._show_welcome()
         self.set_state(None)
@@ -347,8 +354,10 @@ class ChatWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
-        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and self.shell.current == "chat":
-            self.input.setFocus()
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self.sync()
+            if self.shell.current == "chat":
+                self.input.setFocus()
 
     # -- going to a page -------------------------------------------------------------------- #
 
@@ -514,6 +523,7 @@ class ChatWindow(QMainWindow):
         self._reply = None
         self._set_busy(False)
         worker.deleteLater()
+        self._restamp = True
         self.refresh_history()  # the conversation is now the last written in (or new in the list)
 
     # -- the conversations ------------------------------------------------------------------- #
@@ -577,6 +587,14 @@ class ChatWindow(QMainWindow):
         if self._get_config().ready:
             self._call(lambda api: api.me(), known)
 
+    def sync(self) -> None:
+        """What the web site changed meanwhile: the conversations and the projects, read again while the window is
+        in front (and the conversation shown, when it was gone on with elsewhere: see `_listed`)."""
+        if not self.isVisible() or self.isMinimized() or self.busy:
+            return
+        self.refresh_history()
+        self.refresh_projects()
+
     def refresh_history(self, *_) -> None:
         """Fetch the list of conversations again (what the search box holds)."""
         if not self._get_config().ready:
@@ -595,6 +613,7 @@ class ChatWindow(QMainWindow):
         else:
             self.history.show_conversations(conversations, self.conversation, projects=self.project_names)
             self._show_title()
+            self._follow(self.history.info(self.conversation))
             if self._open_latest and not self.history.search.text().strip():
                 self._open_latest = False
                 written = any(role == USER for role, _ in self.view.texts())
@@ -606,18 +625,31 @@ class ChatWindow(QMainWindow):
             self._list_again = False
             self.refresh_history()
 
-    def open_conversation(self, conversation: str) -> None:
-        """Show a conversation of the list, to read it or to go on with it."""
-        self.go("chat") if self.shell.current != "chat" else None
-        if self.busy or conversation == self.conversation and self._opening is None:
+    def _follow(self, info: dict | None) -> None:
+        """The conversation shown, as the list now has it: read again if it was written in elsewhere (the web
+        site, say) since we showed it. Never while an answer is being written, or one is being opened."""
+        if info is None or self.busy or self._opening is not None:
+            return
+        if self._restamp:  # our own answer: that is the state we show
+            self._restamp = False
+            self._stamp = info.get("updated_at")
+        elif self._stamp and info.get("updated_at") != self._stamp:
+            self.open_conversation(info["id"], reload=True)
+
+    def open_conversation(self, conversation: str, reload: bool = False) -> None:
+        """Show a conversation of the list, to read it or to go on with it (`reload`: again, where the window is)."""
+        if not reload and self.shell.current != "chat":
+            self.go("chat")
+        if self.busy or conversation == self.conversation and self._opening is None and not reload:
             return
         self._opening = conversation
         self.history.set_current(conversation)
         self._call(
-            lambda api: api.messages(conversation), lambda shown, error: self._opened(conversation, shown, error)
+            lambda api: api.messages(conversation),
+            lambda shown, error: self._opened(conversation, shown, error, quiet=reload),
         )
 
-    def _opened(self, conversation: str, shown: object, error: str) -> None:
+    def _opened(self, conversation: str, shown: object, error: str, quiet: bool = False) -> None:
         if conversation != self._opening:  # another one was asked for meanwhile, or a new chat
             return
         self._opening = None
@@ -625,10 +657,13 @@ class ChatWindow(QMainWindow):
             error = "the Clara server sent no conversation"
         if error:
             self.history.set_current(self.conversation)
-            self.view.add(ERROR, literal(f"Could not open the conversation: {error}"))
+            if not quiet:  # read again in the background: the next look tries once more
+                self.view.add(ERROR, literal(f"Could not open the conversation: {error}"))
             return
         self.conversation = conversation
-        self.project = (self.history.info(conversation) or {}).get("project")
+        info = self.history.info(conversation) or {}
+        self.project = info.get("project")
+        self._stamp = shown.get("updated_at") or info.get("updated_at")
         self.view.clear()
         if shown.get("summary"):
             self.view.add(NOTE, "**Earlier in this conversation** (summary)  \n" + literal(shown["summary"]))
@@ -660,6 +695,7 @@ class ChatWindow(QMainWindow):
         self._opening = None
         self._open_latest = False
         self.conversation = None
+        self._stamp = None
         self.project = project
         self.view.clear()
         self._show_welcome()

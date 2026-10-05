@@ -172,6 +172,59 @@ def test_a_conversation_of_the_list_is_shown_again_and_goes_on(qt, config, serve
     window.quit_for_good()
 
 
+def test_a_conversation_of_the_web_site_is_shown_and_gone_on_with_in_the_app(qt, config, server):
+    _, state = server
+    state.add_conversation("web:tester:w", ("From the site", "Hello from the site."), title="Site chat")
+    window = make_window(qt, config)
+    window.sync()
+    wait_until(lambda: titles(window) == ["Site chat"])
+    window.open_conversation("web:tester:w")
+    wait_until(lambda: window.conversation == "web:tester:w")
+    assert texts(window, CLARA) == ["Hello from the site."]
+    window.send("and now?")
+    wait_until(lambda: not window.busy)
+    assert state.chat_bodies[0]["conversation"] == "web:tester:w"
+    window.quit_for_good()
+
+
+def test_what_the_web_site_changed_is_read_again_but_not_what_the_app_wrote(qt, config, server):
+    _, state = server
+    state.add_conversation("app:tester:a", ("q", "first answer"), title="Tea", updated_at="2026-10-01T10:00:00+00:00")
+    window = make_window(qt, config)
+    window.open_conversation("app:tester:a")
+    wait_until(lambda: window.conversation == "app:tester:a")
+    assert texts(window, CLARA) == ["first answer"]
+    # gone on elsewhere
+    state.messages["app:tester:a"] += [{"role": "user", "content": "more"}, {"role": "assistant", "content": "second answer"}]
+    state.conversations["app:tester:a"]["updated_at"] = "2026-10-01T11:00:00+00:00"
+    window.sync()
+    wait_until(lambda: texts(window, CLARA) == ["first answer", "second answer"])
+    # our own answer is what we show: the list's new date is not "changed elsewhere"
+    window.send("and now?")
+    wait_until(lambda: not window.busy)
+    wait_until(lambda: window._stamp == state.conversations["app:tester:a"]["updated_at"])
+    shown = texts(window, CLARA)
+    window.sync()
+    wait_until(lambda: not window._listing)
+    assert texts(window, CLARA) == shown and window._opening is None
+    window.quit_for_good()
+
+
+def test_a_conversation_is_not_read_again_while_clara_writes(qt, config, server):
+    _, state = server
+    state.add_conversation("app:tester:a", ("q", "a"), title="Tea", updated_at="2026-10-01T10:00:00+00:00")
+    window = make_window(qt, config)
+    window.open_conversation("app:tester:a")
+    wait_until(lambda: window.conversation == "app:tester:a")
+    state.hold.set()
+    window.send("hello")
+    state.conversations["app:tester:a"]["updated_at"] = "2026-10-01T11:00:00+00:00"
+    window.sync()  # busy: nothing is fetched
+    assert window.busy and window._opening is None and texts(window, USER)[-1] == "hello"
+    window.cancel()
+    window.quit_for_good()
+
+
 def test_a_reminder_that_came_due_in_a_conversation_is_shown_as_one(qt, config, server):
     _, state = server
     state.add_conversation("app:tester:a", ("remind me of tea", "Sure."), ("[Reminder due] Tea", "Your tea!"))
