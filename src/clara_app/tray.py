@@ -21,6 +21,7 @@ class Tray(QSystemTrayIcon):
     toggle_requested = Signal()  # left click
     open_requested = Signal()  # "Open" or a click on a notification
     settings_requested = Signal()
+    tasks_requested = Signal()
     autostart_toggled = Signal(bool)
     quit_requested = Signal()
 
@@ -33,6 +34,9 @@ class Tray(QSystemTrayIcon):
         self._open = QAction(f"Open {APP_NAME}", menu)
         self._open.triggered.connect(self.open_requested)
         menu.addAction(self._open)
+        self._tasks = QAction("Tasks…", menu)
+        self._tasks.triggered.connect(self.tasks_requested)
+        menu.addAction(self._tasks)
         menu.addSeparator()
         self._settings = QAction("Settings…", menu)
         self._settings.triggered.connect(self.settings_requested)

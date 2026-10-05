@@ -67,6 +67,7 @@ class ClaraApplication(QObject):
         self.tray.toggle_requested.connect(self.window.toggle)
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.settings_requested.connect(self.open_settings)
+        self.tray.tasks_requested.connect(self.open_tasks)
         self.tray.autostart_toggled.connect(self._set_autostart)
         self.tray.quit_requested.connect(self.quit)
 
@@ -101,6 +102,11 @@ class ClaraApplication(QObject):
             config_module.save(self.config, self._config_path)
             self.start_listener()  # the server or the token may have changed
             self.window.start_history()  # and so may the user, and their conversations
+
+    def open_tasks(self) -> None:
+        """The to-do list, over the window (which opens first: the dialog belongs to it)."""
+        self.window.bring_to_front()
+        self.window.open_tasks()
 
     def _set_autostart(self, enabled: bool) -> None:
         try:

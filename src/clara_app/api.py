@@ -21,6 +21,7 @@ from .config import Config
 
 CHAT_READ_TIMEOUT = 300.0  # a model can think for a long while before its first token
 REMINDER_READ_TIMEOUT = 60.0  # the server sends a keepalive every 15 s
+TASK_READ_TIMEOUT = 120.0  # adding or reopening a task can have Clara choose its reminders
 PROJECT_READ_TIMEOUT = 300.0  # files to read (PDF, a .zip), a GitHub repository to download
 _KEEP = object()  # update_conversation: leave the project as it is
 
@@ -258,6 +259,35 @@ class ClaraApi:
     def choose_model(self, ref: str | None) -> dict:
         """Choose the model Clara answers this user with in the app (None: the server's own)."""
         return self._call("PUT", "/v1/models/choice", json={**self._identity(), "model": ref}).json()
+
+    # -- the to-do list ---------------------------------------------------------------------- #
+
+    def tasks(self, status: str = "open") -> dict:
+        """This user's tasks (`status`: open, done or all), the same on every client of theirs: `tasks` (`id`, `title`,
+        `description`, `status`, `due_at`, `reminders_sent`, `next_reminder`, `reminders`...) and `max_reminders`."""
+        return self._call("GET", "/v1/tasks", params={**self._identity(), "status": status}).json()
+
+    def task(self, task_id: int) -> dict:
+        return self._call("GET", f"/v1/tasks/{int(task_id)}", params=self._identity()).json()
+
+    def add_task(self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None) -> dict:
+        """A task for this user. `due` and `reminders` are ISO 8601 times with their offset; without any reminder
+        Clara picks them (that can take a moment)."""
+        body = {
+            **self._identity(), "user_name": self.config.user_name or None, "title": title, "description": description,
+            "due": due, "reminders": reminders or [],
+        }
+        return self._call("POST", "/v1/tasks", read=TASK_READ_TIMEOUT, json=body).json()
+
+    def change_task(self, task_id: int, **fields: object) -> dict:
+        """Change a task: `title`, `description`, `due` (None: no deadline), `reminders` (ISO times; [] stops them),
+        `status` ("done" or "open"; reopening has Clara pick the reminders)."""
+        return self._call(
+            "PATCH", f"/v1/tasks/{int(task_id)}", read=TASK_READ_TIMEOUT, json={**self._identity(), **fields}
+        ).json()
+
+    def delete_task(self, task_id: int) -> dict:
+        return self._call("DELETE", f"/v1/tasks/{int(task_id)}", params=self._identity()).json()
 
     # -- projects --------------------------------------------------------------------------- #
 

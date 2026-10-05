@@ -8,7 +8,7 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -91,6 +91,23 @@ class State:
         self.project_sources: dict[int, list[dict]] = {}
         self.uploads: list[list[str]] = []  # the paths of each upload request
         self.project_requests: list[tuple[str, str]] = []  # (method, path) of each /v1/projects request
+        self.tasks: dict[int, dict] = {}  # the to-do list, as the server describes each task
+        self.task_requests: list[tuple[str, str, dict]] = []  # (method, path, body) of each /v1/tasks request
+
+    def add_task(self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None,
+                 sent: int = 0, status: str = "open") -> dict:
+        """A task as the server describes it. Without reminders Clara picks tomorrow at 09:00 (UTC)."""
+        task_id = max(self.tasks, default=0) + 1
+        picked = reminders or [(datetime.now(timezone.utc) + timedelta(days=1)).replace(
+            hour=9, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")]
+        queue = sorted(picked) if status == "open" else []
+        self.tasks[task_id] = {
+            "id": task_id, "title": title, "description": description, "status": status, "due_at": due,
+            "reminders_sent": sent, "max_reminders": 10, "next_reminder": queue[0] if queue else None,
+            "reminders": queue, "timezone": "UTC", "targets": [], "created_at": now(), "updated_at": now(),
+            "done_at": now() if status == "done" else None,
+        }
+        return self.tasks[task_id]
 
     def add_project(self, name: str, **files: str) -> dict:
         project_id = max(self.projects, default=0) + 1
@@ -250,6 +267,43 @@ class Handler(BaseHTTPRequestHandler):
                                     "project": state.describe_project(project_id)})
         return self.reply(404, {"detail": "no such route"})
 
+    def task_route(self, method: str, body: dict | None = None) -> None:
+        """The /v1/tasks routes, as the real server answers them (enough of it for the app)."""
+        state = self.state
+        parts = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(parts.query).items()}
+        segments = parts.path.strip("/").split("/")[2:]  # after v1/tasks
+        state.task_requests.append((method, self.path, body or {}))
+        if not segments:
+            if method == "GET":
+                status = query.get("status", "open")
+                found = [t for t in state.tasks.values() if status == "all" or t["status"] == status]
+                return self.reply(200, {"tasks": found, "max_reminders": 10})
+            if not body["title"].strip():
+                return self.reply(422, {"detail": "A task needs a title."})
+            return self.reply(201, state.add_task(body["title"], body["description"], body["due"], body["reminders"]))
+        task = state.tasks.get(int(segments[0]))
+        if task is None:
+            return self.reply(404, {"detail": "No such task of yours."})
+        if method == "DELETE":
+            state.tasks.pop(task["id"])
+            return self.reply(200, {"deleted": task["id"]})
+        if method == "PATCH":
+            for key in ("title", "description"):
+                if body.get(key) is not None:
+                    task[key] = body[key]
+            if "due" in body:
+                task["due_at"] = body["due"]
+            if body.get("status") == "done":
+                task.update(status="done", reminders=[], next_reminder=None, done_at=now())
+            elif body.get("status") == "open" and task["status"] == "done":
+                again = state.add_task(task["title"], task["description"], task["due_at"], body.get("reminders"))
+                state.tasks.pop(again["id"])
+                task.update(status="open", reminders=again["reminders"], next_reminder=again["next_reminder"], done_at=None)
+            elif body.get("reminders") is not None:
+                task.update(reminders=sorted(body["reminders"]), next_reminder=min(body["reminders"], default=None))
+        return self.reply(200, task)
+
     def conversation_route(self) -> tuple[str, str, dict]:
         """`(conversation, what follows it, query)` of a /v1/conversations/... path."""
         parts = urlsplit(self.path)
@@ -274,6 +328,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, self.models_payload())
         if self.path.startswith("/v1/projects"):
             return self.project_route("GET")
+        if self.path.startswith("/v1/tasks"):
+            return self.task_route("GET")
         if self.path.split("?")[0] == "/v1/conversations":
             query = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
             self.state.list_requests.append(query)
@@ -316,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.authorised():
             if self.path.startswith("/v1/projects"):
                 return self.project_route("DELETE")
+            if self.path.startswith("/v1/tasks"):
+                return self.task_route("DELETE")
             self.state.deleted.append(self.path)
             conversation, _, _ = self.conversation_route()
             self.state.conversations.pop(conversation, None)
@@ -341,6 +399,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/v1/projects"):
             return self.project_route("PATCH", body)
+        if self.path.startswith("/v1/tasks"):
+            return self.task_route("PATCH", body)
         if self.path == "/v1/settings":
             self.state.settings_patches.append(body)
             self.state.notify_after = body["notify_after"]
@@ -370,6 +430,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/v1/projects"):
             return self.project_route("POST", body)
+        if self.path.startswith("/v1/tasks"):
+            return self.task_route("POST", body)
         if self.path == "/v1/notifications":
             self.state.notifications.append(body)
             return self.reply(201, {"id": len(self.state.notifications), "targets": body.get("targets", [])})

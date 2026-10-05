@@ -37,6 +37,7 @@ from .documents import FILTER, MAX_TOTAL_CHARS, Document, compose, split_message
 from .history import SIDEBAR_WIDTH, HistoryPanel, display_title
 from .icon import make_icon
 from .projects_dialog import ProjectsDialog
+from .tasks_dialog import TasksDialog
 from .qcm import QcmCard, display_answers
 from .workers import CallWorker, ChatWorker, DocumentWorker
 
@@ -104,6 +105,7 @@ class ChatWindow(QMainWindow):
         self._readers: list[DocumentWorker] = []  # files being read
         self.project: int | None = None  # where new chats go, and whose conversations are listed
         self.project_names: dict[int, str] = {}
+        self._tasks_dialog: TasksDialog | None = None  # the open tasks dialog, if any
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(make_icon())
@@ -141,10 +143,14 @@ class ChatWindow(QMainWindow):
         self.projects_button = QPushButton("Projects…")
         self.projects_button.setToolTip("Make projects and give them files, folders and GitHub repositories")
         self.projects_button.clicked.connect(self.open_projects)
+        self.tasks_button = QPushButton("Tasks…")
+        self.tasks_button.setToolTip("Your to-do list, with Clara's reminders")
+        self.tasks_button.clicked.connect(self.open_tasks)
         project_row = QHBoxLayout()
         project_row.addWidget(QLabel("Project:"))
         project_row.addWidget(self.project_box, 1)
         project_row.addWidget(self.projects_button)
+        project_row.addWidget(self.tasks_button)
 
         self.view = ChatView()
         self.input = InputBox()
@@ -640,6 +646,23 @@ class ChatWindow(QMainWindow):
 
         dialog.chat_requested.connect(chat_in)
         dialog.finished.connect(dialog.deleteLater)
+        dialog.open()
+
+    def open_tasks(self) -> None:
+        if not self._get_config().ready:
+            self.settings_requested.emit()
+            return
+        if self._tasks_dialog is not None:  # one at a time: bring it back
+            self._tasks_dialog.raise_()
+            self._tasks_dialog.activateWindow()
+            return
+        dialog = self._tasks_dialog = TasksDialog(self._get_config, self._api_factory, self)
+
+        def closed() -> None:
+            self._tasks_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(closed)
         dialog.open()
 
     def delete_conversation(self, conversation: str) -> None:

@@ -44,6 +44,13 @@ put it away. The app keeps running in the tray.
   holds **the message Clara wrote for it** (the reminder's own text if she could not), and ends with the
   state of the server: *Clara is running*. Clicking it opens the app. What fired while the app was closed
   arrives when it starts, marked *missed*.
+- **Tasks**: your to-do list, the same on the web site, in the terminal and in every chat with Clara ("add a task:
+  send the invoice by Friday"). **Tasks…** (next to *Projects…*, and in the icon's menu) opens a dialog: the list
+  with, for each task, how many reminders were sent and the next one; to the right its title, description, deadline
+  and the reminders still to come, which you can change, with *Mark as done* / *Reopen* and *Delete*. A task without
+  a reminder gets them chosen by Clara, and each time one is sent she looks at the task again and may move the next
+  ones, so the dialog reads the list again every 30 seconds. A task reminder pops up like any notification
+  (*Task: …*).
 - **Notifications** pop up the same way: from Clara (when she has finished a long task you asked about),
   from the server (an answer that took long is ready, the conversation was summarised, the model changed) or
   from another client. One about the conversation you are looking at, while the window is in front, is
@@ -52,7 +59,7 @@ put it away. The app keeps running in the tray.
   stopping", "○ Clara is not running"), in the icon's tooltip, and by a notification whenever it
   changes: *Clara is stopping: she finishes what is running and takes nothing new*, *Clara is not
   running*, *Clara is running again*. Asking a question while she is stopping says so.
-- Right-click the icon: Open, Settings…, **Start with Windows**, Quit. The icon (`clara_app/clara.ico`, the same
+- Right-click the icon: Open, Tasks…, Settings…, **Start with Windows**, Quit. The icon (`clara_app/clara.ico`, the same
   picture as the web site's) turns grey when Clara is not running.
 - **The model**: Settings lists the models an administrator lets you choose, with what a token of each costs in
   credits (a bigger model uses your daily credits faster); your choice is for the app only, and Discord's model is the
@@ -132,6 +139,7 @@ src/clara_app/
   qcm.py            the card of a QCM Clara asks, and the message of its answers
   mathview.py       text with formulas: Markdown to HTML, and the web view that typesets it with KaTeX
   settings_dialog.py  server / token / identity, with a connection test
+  tasks_dialog.py   the to-do list: tasks, their reminders, add / change / done / delete
   api.py            the Clara server over HTTP (Qt-free, blocking)
   workers.py        threads: one reply, the reminder / notification / server-state stream, reading
                     documents, a connection test, any other call to the server

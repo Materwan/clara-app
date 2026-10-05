@@ -31,18 +31,19 @@ class TestTray:
         tray.activated.emit(QSystemTrayIcon.ActivationReason.Context)  # right click: the menu, nothing else
         assert seen == ["toggle", "open"]
 
-    def test_the_menu_offers_open_settings_autostart_and_quit(self, qt):
+    def test_the_menu_offers_open_tasks_settings_autostart_and_quit(self, qt):
         tray = Tray()
         labels = [a.text() for a in tray.contextMenu().actions() if not a.isSeparator()]
-        assert labels == ["Open Clara", "Settings…", "Start with Windows", "Quit"]
+        assert labels == ["Open Clara", "Tasks…", "Settings…", "Start with Windows", "Quit"]
         seen = []
         tray.open_requested.connect(lambda: seen.append("open"))
+        tray.tasks_requested.connect(lambda: seen.append("tasks"))
         tray.settings_requested.connect(lambda: seen.append("settings"))
         tray.quit_requested.connect(lambda: seen.append("quit"))
         for action in tray.contextMenu().actions():
             if not action.isSeparator() and action.text() != "Start with Windows":
                 action.trigger()
-        assert seen == ["open", "settings", "quit"]
+        assert seen == ["open", "tasks", "settings", "quit"]
 
     def test_clicking_a_notification_opens_the_app(self, qt):
         tray = Tray()
@@ -195,6 +196,30 @@ class TestNotifications:
         assert describe_notification(event, stamp) == ("Clara", "Done", "")
         title, _, detail = describe_notification({**event, "title": "Build"}, stamp + timedelta(hours=3))
         assert title == "Build" and detail.startswith("Sent ")
+
+    def test_the_tray_opens_the_tasks_over_the_window(self, qt, tmp_path, config):
+        path = tmp_path / "config.json"
+        save(config, path)
+        application = ClaraApplication(qt, config_path=path)
+        opened = []
+        application.window.bring_to_front = lambda: opened.append("window")
+        application.window.open_tasks = lambda: opened.append("tasks")
+        application.tray.tasks_requested.emit()
+        assert opened == ["window", "tasks"]  # the window first: the dialog belongs to it
+        application.quit()
+
+    def test_a_task_reminder_pops_up_with_the_title_of_its_task(self, qt, tmp_path, config):
+        path = tmp_path / "config.json"
+        save(config, path)
+        application = ClaraApplication(qt, config_path=path)
+        shown = []
+        application.tray.notify = lambda title, text: shown.append((title, text))
+        now = datetime.now(timezone.utc).isoformat()
+        application.on_notification(
+            {"type": "notification", "title": "Task: Taxes", "text": "Your taxes are due in two days.", "source": "tasks", "sent_at": now}
+        )
+        assert shown == [("Task: Taxes", "Your taxes are due in two days.")]
+        application.quit()
 
     def test_a_notification_pops_up_and_is_noted(self, qt, tmp_path, config):
         path = tmp_path / "config.json"
