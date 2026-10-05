@@ -1,7 +1,7 @@
-"""The projects dialog: make, edit and delete projects, and fill them with files, folders and GitHub repositories.
+"""The Projects page: make, edit and delete projects, and fill them with files, folders and GitHub repositories.
 
 A project is kept by the server and belongs to the user, so it is the same here and on the web site. Every call
-runs off the UI thread (workers.py); the dialog only shows what the server answers.
+runs off the UI thread (workers.py); the page only shows what the server answers.
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
 from .api import ClaraApi
 from .config import Config
 from .projects import FILTER, Entry, Sent, file_entries, folder_entries, send, size_text
+from .theme import tone
+from .widgets import Page, button as push
 from .workers import CallWorker
 
 ID = Qt.ItemDataRole.UserRole
@@ -82,7 +84,7 @@ class RepositoryDialog(QDialog):
             "Private repositories need a GITHUB_TOKEN on the server."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: gray;")
+        tone(note, "muted")
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
@@ -97,40 +99,39 @@ class RepositoryDialog(QDialog):
             self.accept()
 
 
-class ProjectsDialog(QDialog):
+class ProjectsPage(Page):
     changed = Signal()  # a project was made, renamed or deleted: the window lists them again
     chat_requested = Signal(int)  # "New chat in this project"
+
+    page_title = "Projects"
 
     def __init__(
         self,
         get_config: Callable[[], Config],
         api_factory: Callable[[Config], ClaraApi] = ClaraApi,
-        parent=None,
+        host=None,
         select: int | None = None,
     ):
-        super().__init__(parent)
+        super().__init__()
+        self._host = host
         self._get_config, self._api_factory = get_config, api_factory
         self._select = select
         self.project: dict | None = None  # the one shown, as the server describes it
         self._calls: list[CallWorker] = []
         self._upload: UploadWorker | None = None
-        self.setWindowTitle("Projects")
-        self.resize(860, 620)
 
         intro = QLabel(
             "A project keeps files, folders and GitHub repositories with instructions of its own: every "
             "conversation of the project can use them. They are the same on the web site."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: gray;")
+        tone(intro, "muted")
 
         self.list = QListWidget()
-        self.list.setFixedWidth(220)
+        self.list.setFixedWidth(240)
         self.list.currentItemChanged.connect(self._picked)
-        self.new_button = QPushButton("New project…")
-        self.new_button.clicked.connect(self.create)
-        self.delete_button = QPushButton("Delete…")
-        self.delete_button.clicked.connect(self.delete)
+        self.new_button = push("New project", "primary", self.create)
+        self.delete_button = push("Delete…", "danger", self.delete)
         left = QVBoxLayout()
         left.addWidget(self.list, 1)
         left.addWidget(self.new_button)
@@ -146,8 +147,7 @@ class ProjectsDialog(QDialog):
         self.instructions.setFixedHeight(96)
         for field in (self.name, self.description, self.instructions):
             field.textChanged.connect(self._edited)
-        self.save_button = QPushButton("Save")
-        self.save_button.clicked.connect(self.save)
+        self.save_button = push("Save", "primary", self.save)
         self.chat_button = QPushButton("New chat in this project")
         self.chat_button.clicked.connect(lambda: self.project and self.chat_requested.emit(self.project["id"]))
         form = QFormLayout()
@@ -207,7 +207,7 @@ class ProjectsDialog(QDialog):
         self.remove_file_button.clicked.connect(self.remove_file)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color: gray;")
+        tone(self.status, "muted")
         files_box = QGroupBox("Files")
         files_layout = QVBoxLayout(files_box)
         files_layout.addWidget(self.summary)
@@ -228,17 +228,37 @@ class ProjectsDialog(QDialog):
         right.addWidget(files_box, 1)
 
         body = QHBoxLayout()
+        body.setSpacing(18)
         body.addLayout(left)
         body.addWidget(self.detail, 1)
-        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        close.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 18, 24, 16)
+        layout.setSpacing(14)
         layout.addWidget(intro)
         layout.addLayout(body, 1)
-        layout.addWidget(close)
 
+        self.changed.connect(self._told_host)
+        self.chat_requested.connect(self._chat_in)
         self._show(None)
         self.reload()
+
+    def actions(self) -> list[QWidget]:
+        return []
+
+    def activated(self) -> None:
+        self.reload()
+
+    def _told_host(self) -> None:
+        if self._host is not None:
+            self._host.projects_changed()
+
+    def _chat_in(self, project: int) -> None:
+        if self._host is not None:
+            self._host.chat_in_project(project)
+
+    def show_project(self, project: int) -> None:
+        """Open the page on this project."""
+        self.reload(select=project)
 
     # -- plumbing ------------------------------------------------------------------------- #
 
@@ -276,7 +296,7 @@ class ProjectsDialog(QDialog):
 
     def _say(self, text: str, bad: bool = False) -> None:
         self.status.setText(text)
-        self.status.setStyleSheet("color: #b3261e;" if bad else "color: gray;")
+        tone(self.status, "bad" if bad else "muted")
 
     def _enable(self) -> None:
         shown = self.project is not None
@@ -291,14 +311,12 @@ class ProjectsDialog(QDialog):
         self.remove_file_button.setEnabled(self.files.currentItem() is not None and self.files.currentItem().data(ID) is not None and not busy)
         self.save_button.setEnabled(shown and self._dirty())
 
-    def done(self, result: int) -> None:
-        if self.busy:
-            QMessageBox.information(self, "Projects", "Wait until the files are sent, or the repository downloaded.")
-            return
+    def shutdown(self) -> None:
         for worker in list(self._calls):
             worker.then = None
             worker.wait(5000)
-        super().done(result)
+        if self._upload is not None:
+            self._upload.wait(5000)
 
     # -- the list ------------------------------------------------------------------------- #
 

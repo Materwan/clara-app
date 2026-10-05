@@ -23,6 +23,8 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPalette
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QSizePolicy, QWidget
 
+from .theme import THEME
+
 try:  # Qt WebEngine is a large optional part of PySide6: without it formulas stay as their source
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -196,6 +198,10 @@ if WEBENGINE:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.setFixedHeight(self._tall)
             self.set_text(text)
+            THEME.changed.connect(self._retheme)
+
+        def _retheme(self) -> None:
+            self.set_text(self.text)  # in the colours of the new theme
 
         def set_text(self, text: str) -> None:
             self.text = text

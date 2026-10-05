@@ -24,6 +24,7 @@ class ChatWorker(QThread):
 
     token = Signal(str)
     qcm = Signal(dict)  # a form Clara asks the user to answer
+    tool = Signal(dict)  # a tool of the server ran: `name`, `arguments`, `result`
     answered = Signal()
     failed = Signal(str)
 
@@ -52,6 +53,8 @@ class ChatWorker(QThread):
                     self.token.emit(event["text"])
                 elif kind == "qcm":
                     self.qcm.emit(event["form"])
+                elif kind == "tool":
+                    self.tool.emit(event)
                 elif kind == "error":
                     self.failed.emit(str(event.get("message", "the server reported an error")))
                     return

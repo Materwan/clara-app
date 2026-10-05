@@ -28,6 +28,7 @@ class Config:
     token: str = ""
     user_id: str = ""
     user_name: str = ""
+    theme: str = "auto"  # "auto" (follow Windows), "light" or "dark"
 
     @property
     def ready(self) -> bool:

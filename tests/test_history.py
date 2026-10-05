@@ -9,9 +9,9 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from clara_app.api import ClaraApi
 from clara_app.chat_view import CLARA, ERROR, NOTE, USER
-from clara_app.chat_window import GREETING, ChatWindow
+from clara_app.chat_window import ChatWindow
 from clara_app.documents import Document, compose, preview, split_message
-from clara_app.history import SIDEBAR_WIDTH, UNTITLED, HistoryPanel, display_title, group_of
+from clara_app.history import UNTITLED, HistoryPanel, display_title, group_of
 
 
 def make_window(qt, config) -> ChatWindow:
@@ -75,36 +75,79 @@ def test_the_panel_shows_pinned_ones_first_under_headings(qt):
         today=today,
     )
     assert panel.items() == [
-        (None, "PINNED"), ("p", "Pinned one"),
-        (None, "TODAY"), ("a", "Tea timer"), ("b", "Explain malloc"),
-        (None, "YESTERDAY"), ("c", "C pointers"),
+        (None, "Pinned"), ("p", "Pinned one"),
+        (None, "Today"), ("a", "Tea timer"), ("b", "Explain malloc"),
+        (None, "Yesterday"), ("c", "C pointers"),
     ]
     assert panel.list.currentItem().text() == "Tea timer"
     assert [action.text() for action in panel.menu_for("p").actions() if action.text()] == [
         "Rename…", "Unpin", "Move to a project…", "Delete…"
     ]
-    assert "Pin" in [action.text() for action in panel.menu_for("a").actions()]
+    assert "Pin to the top" in [action.text() for action in panel.menu_for("a").actions()]
     panel.show_conversations([], current=None)
     assert panel.note.text() == "No conversation yet."
+
+
+def test_the_conversations_of_a_project_are_grouped_under_its_name_newest_first(qt):
+    today = date(2026, 10, 3)
+    panel = HistoryPanel()
+    panel.show_conversations(
+        [
+            {"id": "t3", "title": "Pinned in a project", "pinned": True, "updated_at": at(today - timedelta(days=30)), "project": 1},
+            {"id": "a", "title": "Free chat", "pinned": False, "updated_at": at(today), "project": None},
+            {"id": "t1", "title": "Old outline", "pinned": False, "updated_at": at(today - timedelta(days=9)), "project": 1},
+            {"id": "t2", "title": "New outline", "pinned": False, "updated_at": at(today - timedelta(days=1)), "project": 1},
+            {"id": "c1", "title": "Bot rewrite", "pinned": False, "updated_at": at(today), "project": 2},
+        ],
+        current=None,
+        today=today,
+        projects={1: "Thesis", 2: "Clara"},
+    )
+    assert panel.items() == [
+        (None, "Pinned"), ("t3", "Pinned in a project"),
+        (None, "Today"), ("a", "Free chat"),
+        (None, "Clara"), ("c1", "Bot rewrite"),  # the project with the latest conversation first
+        (None, "Thesis"), ("t2", "New outline"), ("t1", "Old outline"),
+    ]
+    opened = []
+    panel.project_opened.connect(opened.append)
+    heading = next(panel.list.item(row) for row in range(panel.list.count()) if panel.list.item(row).text() == "Thesis")
+    panel._clicked(heading)
+    assert opened == [1]
 
 
 # --- the window ----------------------------------------------------------------------------------
 
 
-def test_the_list_opens_at_the_side_and_the_window_grows_to_its_left(qt, config, server):
+def test_the_rail_lists_the_conversations_beside_the_page(qt, config, server):
     _, state = server
     state.add_conversation("app:tester:a", ("Tea timer", "Set."), title="Tea")
     window = make_window(qt, config)
-    window.move(window.screen().availableGeometry().left() + 400, 50)
-    width, right = window.width(), window.geometry().right()
-    window.history_button.click()
-    assert window.history.isVisible()
-    assert window.width() == width + SIDEBAR_WIDTH + 6 and window.geometry().right() == right
-    assert not window.new_chat_button.isVisibleTo(window)
+    window.start_history()
+    assert window.history.isVisibleTo(window.shell) and window.shell.new_chat.isVisibleTo(window.shell)
     wait_until(lambda: titles(window) == ["Tea"])
-    window.history_button.click()
-    assert not window.history.isVisible() and window.width() == width and window.geometry().right() == right
-    assert window.new_chat_button.isVisibleTo(window)  # the header's, hidden while the list (with its own) is shown
+    window.quit_for_good()
+
+
+def test_project_chats_are_listed_under_their_project_and_a_new_chat_starts_in_one(qt, config, server):
+    _, state = server
+    project = state.add_project("Thesis")
+    state.add_conversation("app:tester:a", ("outline", "ok"), title="Outline")
+    state.conversations["app:tester:a"]["project"] = project["id"]
+    state.add_conversation("app:tester:b", ("tea", "ok"), title="Tea", updated_at="2026-01-01T10:00:00+00:00")
+    window = make_window(qt, config)
+    window.refresh_history()
+    window.refresh_projects()
+    wait_until(lambda: window.project_names == {project["id"]: "Thesis"} and len(titles(window)) == 2)
+    assert window.history.items() == [(None, "Older"), ("app:tester:b", "Tea"), (None, "Thesis"), ("app:tester:a", "Outline")]
+    window.chat_in_project(project["id"])  # from the project's page
+    assert window.project == project["id"] and window.shell.current == "chat" and window.conversation is None
+    window.send("a new thought")
+    wait_until(lambda: not window.busy)
+    assert state.chat_bodies[0]["project"] == project["id"]
+    wait_until(lambda: len(titles(window)) == 3)
+    window.new_chat()  # the next one is in none
+    assert window.project is None
     window.quit_for_good()
 
 
@@ -154,7 +197,6 @@ def test_the_summary_of_messages_no_longer_kept_is_shown(qt, config, server):
 def test_a_new_conversation_joins_the_list_and_clara_titles_it(qt, config, server):
     _, state = server
     window = make_window(qt, config)
-    window.history_button.click()
     window.send("How do pointers work?")
     wait_until(lambda: titles(window) == ["Clara's title"])
     assert state.title_requests == [window.conversation]
@@ -166,7 +208,6 @@ def test_without_a_title_it_is_listed_by_its_first_words_and_asked_again(qt, con
     _, state = server
     state.title = None  # the model fails
     window = make_window(qt, config)
-    window.history_button.click()
     window.send("How do pointers work?")
     wait_until(lambda: titles(window) == ["How do pointers work?"] and len(state.title_requests) == 1)
     wait_until(lambda: not window._titling)
@@ -183,12 +224,12 @@ def test_the_list_cannot_be_used_while_clara_writes(qt, config, server):
     state.hold.set()
     window = make_window(qt, config)
     window.send("hello")
-    assert not window.history.list.isEnabled() and not window.new_chat_button.isEnabled()
+    assert not window.history.list.isEnabled() and not window.shell.new_chat.isEnabled()
     window.open_conversation("app:tester:a")
     window.new_chat()
     assert window.busy and window.conversation.startswith("app:tester:") and texts(window, USER) == ["hello"]
     window.cancel()
-    assert window.history.list.isEnabled() and window.new_chat_button.isEnabled()
+    assert window.history.list.isEnabled() and window.shell.new_chat.isEnabled()
     window.quit_for_good()
 
 
@@ -203,7 +244,7 @@ def test_a_message_waits_for_the_conversation_being_opened(qt, config, server):
     window.new_chat()  # changed their mind: the conversation, when it comes, is not shown
     state.hold_messages.clear()
     wait_until(lambda: not window._calls)
-    assert window.conversation is None and texts(window, NOTE) == [GREETING]
+    assert window.conversation is None and texts(window, NOTE) == []
     window.quit_for_good()
 
 
@@ -222,7 +263,7 @@ def test_rename_pin_and_delete(qt, config, server, monkeypatch):
 
     window.pin_conversation("app:tester:b", True)
     wait_until(lambda: titles(window) == ["Pointers in C", "Tea"])
-    assert window.history.items()[0] == (None, "PINNED")
+    assert window.history.items()[0] == (None, "Pinned")
 
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.No))
     window.delete_conversation("app:tester:b")
@@ -230,7 +271,7 @@ def test_rename_pin_and_delete(qt, config, server, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *args, **kwargs: QMessageBox.StandardButton.Yes))
     window.delete_conversation("app:tester:b")
     wait_until(lambda: titles(window) == ["Tea"])
-    assert window.conversation is None and texts(window, NOTE) == [GREETING]  # it was the one shown
+    assert window.conversation is None and texts(window, NOTE) == []  # it was the one shown
     window.quit_for_good()
 
 
@@ -239,7 +280,7 @@ def test_search_asks_the_server(qt, config, server):
     state.add_conversation("app:tester:a", ("Tea timer", "Set."), title="Tea")
     state.add_conversation("app:tester:b", ("C pointers", "Ok."), title="C")
     window = make_window(qt, config)
-    window.history_button.click()
+    window.refresh_history()
     wait_until(lambda: len(titles(window)) == 2)
     window.history.search.setText("pointer")
     wait_until(lambda: titles(window) == ["C"])

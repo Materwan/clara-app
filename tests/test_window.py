@@ -8,7 +8,7 @@ from PySide6.QtTest import QTest
 
 from clara_app.api import ClaraApi
 from clara_app.chat_view import CLARA, ERROR, NOTE, USER
-from clara_app.chat_window import GREETING, ChatWindow, literal
+from clara_app.chat_window import ChatWindow, greeting, literal
 from clara_app.config import Config
 
 
@@ -34,9 +34,9 @@ def test_a_question_gets_a_streamed_markdown_answer(qt, config, server):
 
     QTest.keyClick(window.input, Qt.Key.Key_Return)
 
-    assert window.busy and window.send_button.text() == "Stop"
+    assert window.busy and window.send_button.toolTip() == "Stop the answer"
     wait_until(lambda: not window.busy)
-    assert window.send_button.text() == "Send" and window.input.toPlainText() == ""
+    assert window.send_button.toolTip() == "Send" and window.input.toPlainText() == ""
     assert texts(window, USER) == [literal("hi *there*")]
     assert texts(window, CLARA) == ["Hello **world**"]  # the label renders it as bold
     assert state.chat_bodies[0]["message"] == "hi *there*"
@@ -89,7 +89,7 @@ def test_stop_keeps_what_has_arrived(qt, config, server):
     window.send("hello")
     wait_until(lambda: texts(window, CLARA) == ["Hello "] or window._reply_text == "Hello ")
     window.send_button.click()  # Stop
-    assert not window.busy and window.send_button.text() == "Send"
+    assert not window.busy and window.send_button.toolTip() == "Send"
     assert texts(window, CLARA) == ["Hello "]
     assert texts(window, ERROR) == []
     window.quit_for_good()
@@ -124,7 +124,8 @@ def test_new_chat_clears_the_view_and_keeps_the_conversation_on_the_server(qt, c
     assert first.startswith("app:tester:") and state.chat_bodies[0]["conversation"] == first
     window.new_chat()
     assert window.conversation is None and state.deleted == []
-    assert texts(window, USER) == [] and texts(window, CLARA) == [] and texts(window, NOTE) == [GREETING]
+    assert texts(window, USER) == [] and texts(window, CLARA) == [] and texts(window, NOTE) == []
+    assert not window.view.welcome.isHidden()  # the greeting shows while nothing is written
     window.send("another")
     wait_until(lambda: not window.busy)
     assert window.conversation not in (None, first)
@@ -162,14 +163,68 @@ def test_a_reminder_is_noted_in_the_conversation(qt, config):
 
 def test_the_status_line_follows_the_connection(qt, config):
     window = make_window(qt, config)
+    status = window.shell._me_status
     window.set_state("running")
-    assert window.status.text() == "● Clara is running"
+    assert status.text() == "Clara is running"
     window.set_state("stopping")
-    assert window.status.text() == "◐ Clara is stopping"
+    assert status.text() == "Clara is stopping"
     window.set_state("down")
-    assert window.status.text() == "○ Clara is not running"
+    assert status.text() == "Clara is not running"
     window.set_state(None)
-    assert window.status.text() == ""
+    assert status.text() == ""
+    window.quit_for_good()
+
+
+def test_the_greeting_names_the_part_of_the_day():
+    from datetime import datetime
+
+    assert greeting(datetime(2026, 10, 5, 3)) == "Hello" and greeting(datetime(2026, 10, 5, 9)) == "Good morning"
+    assert greeting(datetime(2026, 10, 5, 15)) == "Good afternoon" and greeting(datetime(2026, 10, 5, 21)) == "Good evening"
+
+
+def test_the_pages_are_opened_from_the_rail_and_the_settings_bar(qt, config):
+    window = make_window(qt, config)
+    assert window.shell.current == "chat" and window.shell.nav_buttons["chat"].isChecked()
+    window.shell.nav_buttons["projects"].click()
+    assert window.shell.current == "projects" and window.shell.title.text() == "Projects"
+    window.shell.me.click()  # you: the settings
+    assert window.shell.current == "account" and window.shell.tabs["account"].isChecked() and window.shell.me.isChecked()
+    assert not window.shell.settings_bar.isHidden() and window.shell.tabs["discord"].isHidden()  # not an administrator
+    window.shell.tabs["memory"].click()
+    assert window.shell.current == "memory"
+    window.go("admin")  # a page for administrators only
+    assert window.shell.current == "account"
+    window.shell.set_admin(True)
+    window.go("admin")
+    assert window.shell.current == "admin" and not window.shell.tabs["admin"].isHidden()
+    window.go("chat")
+    assert window.shell.settings_bar.isHidden() and window.shell.nav_buttons["chat"].isChecked()
+    window.quit_for_good()
+
+
+def test_the_rail_becomes_a_drawer_when_the_window_is_narrow(qt, config):
+    window = make_window(qt, config)
+    window.resize(1100, 700)
+    qt.processEvents()
+    assert window.shell.rail.isVisibleTo(window.shell) and not window.shell.menu_button.isVisibleTo(window.shell)
+    window.resize(560, 700)
+    qt.processEvents()
+    assert window.shell.narrow and not window.shell.rail.isVisible() and window.shell.menu_button.isVisibleTo(window.shell)
+    window.shell.menu_button.click()
+    wait_until(lambda: window.shell.rail.isVisible() and window.shell.rail.x() == 0)
+    window.shell.set_rail_open(False)
+    wait_until(lambda: not window.shell.rail.isVisible())
+    window.quit_for_good()
+
+
+def test_a_tool_that_ran_leaves_a_note_under_the_reply(qt, config, server):
+    _, state = server
+    state.extra_events = [{"type": "tool", "name": "remind", "arguments": {"text": "Call mum", "when": "tomorrow"}, "result": "ok"},
+                          {"type": "tool", "name": "adjust_relation", "arguments": {"delta": 3}, "result": "ok"}]
+    window = make_window(qt, config)
+    window.send("remind me")
+    wait_until(lambda: not window.busy)
+    assert window.view.bubbles[-1].notes == [("Set a reminder", "Call mum")]  # the relationship is not shown
     window.quit_for_good()
 
 
@@ -179,5 +234,5 @@ def test_a_long_input_grows_then_scrolls(qt, config):
     window.input.setPlainText("\n".join(["line"] * 3))
     three = window.input.height()
     window.input.setPlainText("\n".join(["line"] * 30))
-    assert one < three < window.input.height() <= 6 * window.input.fontMetrics().lineSpacing() + 30
+    assert one < three < window.input.height() <= 6 * window.input.fontMetrics().lineSpacing() + 60
     window.quit_for_good()

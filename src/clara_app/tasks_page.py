@@ -1,9 +1,9 @@
-"""The tasks dialog: your to-do list, with the reminders still to come of each task.
+"""The Tasks page: your to-do list, with the reminders still to come of each task.
 
 The list is kept by the server and belongs to the user, so it is the same here, on the web site, in the terminal and in
 every chat with Clara. Clara picks the reminders of a task given none, and moves the next ones each time one is sent:
-the numbers shown here change by themselves, so the dialog reads the list again from time to time. Every call runs off
-the UI thread (workers.py); the dialog only shows what the server answers.
+the numbers shown here change by themselves, so the page reads the list again from time to time. Every call runs off
+the UI thread (workers.py); the page only shows what the server answers.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
     QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -34,6 +33,8 @@ from PySide6.QtWidgets import (
 
 from .api import ClaraApi
 from .config import Config
+from .theme import tone
+from .widgets import Page, button as push
 from .workers import CallWorker
 
 ID = Qt.ItemDataRole.UserRole
@@ -72,16 +73,19 @@ def summary(task: dict) -> str:
     return f"{sent} · {next_reminder}{due}"
 
 
-class TasksDialog(QDialog):
+class TasksPage(Page):
     changed = Signal()  # a task was added, changed or deleted
+
+    page_title = "Tasks"
 
     def __init__(
         self,
         get_config: Callable[[], Config],
         api_factory: Callable[[Config], ClaraApi] = ClaraApi,
-        parent=None,
+        host=None,
     ):
-        super().__init__(parent)
+        super().__init__()
+        self._host = host
         self._get_config, self._api_factory = get_config, api_factory
         self.tasks: list[dict] = []  # every task, as the server describes them
         self.task: dict | None = None  # the one shown in the form (None: a new one)
@@ -92,15 +96,13 @@ class TasksDialog(QDialog):
         self._list_failed = False  # the status line shows that the list could not be read
         self._due_touched = False
         self._reminders_touched = False
-        self.setWindowTitle("Tasks")
-        self.resize(820, 560)
 
         intro = QLabel(
             "Your to-do list, the same on the web site and in every chat with Clara. Each task has reminders: choose "
             "them, or leave it to Clara, who also moves the next ones each time one is sent."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: gray;")
+        tone(intro, "muted")
 
         self.filter = QComboBox()
         for label, status in FILTERS:
@@ -111,10 +113,9 @@ class TasksDialog(QDialog):
         self.list.setWordWrap(True)  # a task's second line is long: it wraps instead of scrolling sideways
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.currentItemChanged.connect(self._picked)
-        self.new_button = QPushButton("New task…")
-        self.new_button.clicked.connect(self.start_new)
+        self.new_button = push("New task", "primary", self.start_new)
         self.count = QLabel("")
-        self.count.setStyleSheet("color: gray;")
+        tone(self.count, "muted")
         left = QVBoxLayout()
         left.addWidget(self.filter)
         left.addWidget(self.list, 1)
@@ -157,7 +158,7 @@ class TasksDialog(QDialog):
         reminders_box.addLayout(reminder_row)
         self.hint = QLabel("")
         self.hint.setWordWrap(True)
-        self.hint.setStyleSheet("color: gray;")
+        tone(self.hint, "muted")
         self.info = QLabel("")
         self.info.setWordWrap(True)
         for field in (self.title, self.description):
@@ -168,13 +169,10 @@ class TasksDialog(QDialog):
         form.addRow("Description:", self.description)
         form.addRow("", due_row)
         form.addRow("Reminders:", reminders_box)
-        self.save_button = QPushButton("Save")
+        self.save_button = push("Save", "primary", self.save)
         self.save_button.setDefault(True)
-        self.save_button.clicked.connect(self.save)
-        self.done_button = QPushButton("Mark as done")
-        self.done_button.clicked.connect(self.toggle_done)
-        self.delete_button = QPushButton("Delete…")
-        self.delete_button.clicked.connect(self.delete)
+        self.done_button = push("Mark as done", "", self.toggle_done)
+        self.delete_button = push("Delete…", "danger", self.delete)
         buttons = QHBoxLayout()
         buttons.addWidget(self.delete_button)
         buttons.addWidget(self.done_button)
@@ -182,7 +180,7 @@ class TasksDialog(QDialog):
         buttons.addWidget(self.save_button)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color: gray;")
+        tone(self.status, "muted")
 
         self.detail = QWidget()
         right = QVBoxLayout(self.detail)
@@ -194,15 +192,15 @@ class TasksDialog(QDialog):
         right.addLayout(buttons)
 
         body = QHBoxLayout()
+        body.setSpacing(18)
         body.addLayout(left)
         body.addWidget(self.detail, 1)
-        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        close.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 18, 24, 16)
+        layout.setSpacing(14)
         layout.addWidget(intro)
         layout.addLayout(body, 1)
         layout.addWidget(self.status)
-        layout.addWidget(close)
 
         self._timer = QTimer(self)
         self._timer.setInterval(REFRESH_MS)
@@ -247,14 +245,19 @@ class TasksDialog(QDialog):
 
     def _say(self, text: str, bad: bool = False) -> None:
         self.status.setText(text)
-        self.status.setStyleSheet("color: #b3261e;" if bad else "color: gray;")
+        tone(self.status, "bad" if bad else "muted")
 
-    def done(self, result: int) -> None:
+    def actions(self) -> list[QWidget]:
+        return []
+
+    def activated(self) -> None:
+        self.reload()
+
+    def shutdown(self) -> None:
         self._timer.stop()
         for worker in list(self._calls):
             worker.then = None
             worker.wait(5000)
-        super().done(result)
 
     def _enable(self) -> None:
         busy = self.busy

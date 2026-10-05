@@ -3,6 +3,7 @@ together."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -16,6 +17,7 @@ from .chat_window import ChatWindow
 from .config import Config
 from .settings_dialog import SettingsDialog
 from .status import CHANGED, STATUS, from_server
+from .theme import install as install_theme
 from .tray import Tray
 from .workers import ReminderWorker
 
@@ -61,12 +63,15 @@ class ClaraApplication(QObject):
         self.listener: ReminderWorker | None = None
         self.server_state: str | None = None  # "running", "stopping", "down"; None until the server answers
 
+        install_theme(qt, self.config.theme)
         self.window = ChatWindow(lambda: self.config, api_factory)
         self.window.settings_requested.connect(self.open_settings)
+        self.window.theme_chosen.connect(self._theme_chosen)
+        self.window.signed_out.connect(self.sign_out)
         self.tray = Tray()
         self.tray.toggle_requested.connect(self.window.toggle)
         self.tray.open_requested.connect(self.window.bring_to_front)
-        self.tray.settings_requested.connect(self.open_settings)
+        self.tray.settings_requested.connect(self.open_account)
         self.tray.tasks_requested.connect(self.open_tasks)
         self.tray.autostart_toggled.connect(self._set_autostart)
         self.tray.quit_requested.connect(self.quit)
@@ -103,8 +108,28 @@ class ClaraApplication(QObject):
             self.start_listener()  # the server or the token may have changed
             self.window.start_history()  # and so may the user, and their conversations
 
+    def open_account(self) -> None:
+        """Your settings: the Account page (the connection to the server is changed from there)."""
+        if not self.config.ready:
+            self.open_settings(first_run=True)
+            return
+        self.window.bring_to_front()
+        self.window.go("account")
+
+    def sign_out(self) -> None:
+        """Forget the token on this computer and ask to sign in again."""
+        self.config = replace(self.config, token="")
+        config_module.save(self.config, self._config_path)
+        self.stop_listener()
+        self.window.shell.set_admin(False)
+        self.open_settings(first_run=True)
+
+    def _theme_chosen(self, preference: str) -> None:
+        self.config = replace(self.config, theme=preference)
+        config_module.save(self.config, self._config_path)
+
     def open_tasks(self) -> None:
-        """The to-do list, over the window (which opens first: the dialog belongs to it)."""
+        """The to-do list, in the window."""
         self.window.bring_to_front()
         self.window.open_tasks()
 

@@ -93,6 +93,9 @@ class State:
         self.project_requests: list[tuple[str, str]] = []  # (method, path) of each /v1/projects request
         self.tasks: dict[int, dict] = {}  # the to-do list, as the server describes each task
         self.task_requests: list[tuple[str, str, dict]] = []  # (method, path, body) of each /v1/tasks request
+        # any other route: (method, path or "prefix/") -> a payload, (status, payload), or a function of (body, query, path)
+        self.routes: dict[tuple[str, str], object] = {}
+        self.requests: list[tuple[str, str, dict]] = []  # (method, path, body) of each request a route answered
 
     def add_task(self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None,
                  sent: int = 0, status: str = "open") -> dict:
@@ -184,6 +187,19 @@ class Handler(BaseHTTPRequestHandler):
     def settings_payload(self) -> dict:
         own = self.state.notify_after
         return {"notify_after": own, "notify_after_default": 120, "notify_after_effective": 120 if own is None else own}
+
+    def routed(self, method: str, body: dict | None = None) -> bool:
+        """Answer from `state.routes` when the test set a route for this request."""
+        parts = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(parts.query).items()}
+        for (verb, prefix), answer in self.state.routes.items():
+            if verb == method and (parts.path == prefix or (prefix.endswith("/") and parts.path.startswith(prefix))):
+                self.state.requests.append((method, parts.path, body or {}))
+                payload = answer(body or {}, query, parts.path) if callable(answer) else answer
+                status, payload = payload if isinstance(payload, tuple) else (200, payload)
+                self.reply(status, payload)
+                return True
+        return False
 
     def authorised(self) -> bool:
         accepted = [TOKEN] + ([] if self.state.signed_out else [USER_TOKEN])
@@ -318,6 +334,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"status": "ok", "provider": "local", "model": self.state.model})
         if not self.authorised():
             return
+        if self.routed("GET"):
+            return
         if self.path.startswith("/v1/memory/facts"):
             return self.reply(404, {"detail": "Nobody known as app:tester"})
         if self.path.split("?")[0] == "/v1/settings":
@@ -370,6 +388,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.authorised():
+            if self.routed("DELETE"):
+                return
             if self.path.startswith("/v1/projects"):
                 return self.project_route("DELETE")
             if self.path.startswith("/v1/tasks"):
@@ -384,6 +404,8 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}")
         if not self.authorised():
             return
+        if self.routed("PUT", body):
+            return
         if self.path == "/v1/models/choice":
             self.state.model_requests.append(body)
             if body["model"] is not None and not any(m["ref"] == body["model"] for m in self.state.offered_models):
@@ -396,6 +418,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         if not self.authorised():
+            return
+        if self.routed("PATCH", body):
             return
         if self.path.startswith("/v1/projects"):
             return self.project_route("PATCH", body)
@@ -427,6 +451,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401, {"detail": "Wrong user name or password"})
             return self.reply(200, {"token": USER_TOKEN, "user": {"name": body["username"].lower()}, "surface": "app"})
         if not self.authorised():
+            return
+        if self.routed("POST", body):
             return
         if self.path.startswith("/v1/projects"):
             return self.project_route("POST", body)

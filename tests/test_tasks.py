@@ -1,4 +1,4 @@
-"""The to-do list in the app: the API, the tasks dialog, and how it is opened."""
+"""The to-do list in the app: the API, the Tasks page, and how it is opened."""
 
 from __future__ import annotations
 
@@ -11,18 +11,18 @@ from PySide6.QtWidgets import QMessageBox
 
 from clara_app.api import ApiError, ClaraApi
 from clara_app.chat_window import ChatWindow
-from clara_app.tasks_dialog import TasksDialog, local, summary, to_iso, to_qt
+from clara_app.tasks_page import TasksPage, local, summary, to_iso, to_qt
 
 TOMORROW = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
 
 
-def make_dialog(qt, config) -> TasksDialog:
-    dialog = TasksDialog(lambda: config, ClaraApi)
+def make_dialog(qt, config) -> TasksPage:
+    dialog = TasksPage(lambda: config, ClaraApi)
     dialog.show()
     return dialog
 
 
-def titles(dialog: TasksDialog) -> list[str]:
+def titles(dialog: TasksPage) -> list[str]:
     return [dialog.list.item(row).text().split("\n")[0] for row in range(dialog.list.count())]
 
 
@@ -100,7 +100,7 @@ def test_the_dialog_lists_the_tasks_and_shows_one_in_the_form(qt, config, server
     assert titles(dialog) == ["Old"]
     dialog.filter.setCurrentIndex(2)  # All
     assert sorted(titles(dialog)) == ["Old", "Taxes"]
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_a_new_task_without_reminders_is_left_to_clara(qt, config, server):
@@ -120,7 +120,7 @@ def test_a_new_task_without_reminders_is_left_to_clara(qt, config, server):
     assert body["due"] is not None and datetime.fromisoformat(body["due"]).utcoffset() is not None  # with its offset
     wait_until(lambda: dialog.status.text() == "Saved." and titles(dialog) == ["Send the invoice"])
     assert dialog.reminders.count() == 1  # what Clara chose
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_a_new_task_with_the_reminders_the_person_chose(qt, config, server):
@@ -140,7 +140,7 @@ def test_a_new_task_with_the_reminders_the_person_chose(qt, config, server):
     wait_until(lambda: state.tasks)
     body = next(body for method, _, body in state.task_requests if method == "POST")
     assert len(body["reminders"]) == 1 and datetime.fromisoformat(body["reminders"][0]) == TOMORROW + timedelta(hours=1)
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_only_what_was_changed_is_sent(qt, config, server):
@@ -162,7 +162,7 @@ def test_only_what_was_changed_is_sent(qt, config, server):
     dialog.save()
     wait_until(lambda: state.tasks[1]["due_at"] is None and state.tasks[1]["reminders"] == [])
     assert patches(state)[-1]["due"] is None and patches(state)[-1]["reminders"] == []
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_a_task_is_marked_done_reopened_and_deleted(qt, config, server, monkeypatch):
@@ -186,7 +186,7 @@ def test_a_task_is_marked_done_reopened_and_deleted(qt, config, server, monkeypa
     dialog.delete()
     wait_until(lambda: not state.tasks and dialog.task is None)
     assert dialog.status.text() == "Deleted." and titles(dialog) == []
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_the_dialog_follows_what_clara_changes_meanwhile(qt, config, server):
@@ -210,7 +210,7 @@ def test_the_dialog_follows_what_clara_changes_meanwhile(qt, config, server):
     state.tasks.clear()
     dialog.reload()
     wait_until(lambda: dialog.task is None)
-    dialog.done(0)
+    dialog.shutdown()
 
 
 def test_a_failure_is_shown_in_the_dialog(qt, config, server):
@@ -220,23 +220,22 @@ def test_a_failure_is_shown_in_the_dialog(qt, config, server):
     config.token = "nope"  # the server will refuse it
     dialog.save()
     wait_until(lambda: "401" in dialog.status.text())
-    assert dialog.status.styleSheet() == "color: #b3261e;"
-    dialog.done(0)
+    assert dialog.status.property("tone") == "bad"
+    dialog.shutdown()
 
 
 # --- how it is opened -------------------------------------------------------------------------------------
 
 
-def test_the_window_opens_one_tasks_dialog_at_a_time(qt, config, server):
+def test_the_window_shows_the_tasks_page_and_keeps_it(qt, config, server):
     window = ChatWindow(lambda: config, ClaraApi)
-    assert window.tasks_button.text() == "Tasks…"
+    window.show()
     window.open_tasks()
-    first = window._tasks_dialog
-    assert isinstance(first, TasksDialog) and first.isVisible()
+    first = window.shell.pages["tasks"]
+    assert isinstance(first, TasksPage) and window.shell.current == "tasks" and first.isVisible()
+    window.go("chat")
     window.open_tasks()
-    assert window._tasks_dialog is first  # brought back, not a second one
-    first.done(0)
-    wait_until(lambda: window._tasks_dialog is None)
+    assert window.shell.pages["tasks"] is first  # the same page again, not a second one
     window.quit_for_good()
     window.close()
 
@@ -247,7 +246,7 @@ def test_without_a_server_the_window_asks_for_the_settings_first(qt, config):
     window = ChatWindow(lambda: replace(config, token=""), ClaraApi)
     asked = []
     window.settings_requested.connect(lambda: asked.append(True))
-    window.tasks_button.click()
-    assert asked == [True] and window._tasks_dialog is None
+    window.open_tasks()
+    assert asked == [True] and window.shell.current == "chat"
     window.quit_for_good()
     window.close()

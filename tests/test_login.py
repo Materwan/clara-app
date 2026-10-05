@@ -79,133 +79,16 @@ class TestDialog:
         wait_until(lambda: dialog.verdict.text().startswith("Connected"))
         assert dialog.config().token == USER_TOKEN and dialog.password.text() == ""
 
+    def test_the_dialog_no_longer_holds_the_account_settings(self, qt):
+        dialog = SettingsDialog(Config(url="http://x", token=USER_TOKEN, user_id="tester"))
+        assert not hasattr(dialog, "notify_mode") and not hasattr(dialog, "model_box")  # they are on the Account page
+
     def test_without_a_token_or_a_password_it_cannot_be_saved(self, qt, server):
         url, _ = server
         dialog = dialog_for(url, password="")
         assert not dialog.save_button.isEnabled()
         dialog.password.setText("x")
         assert dialog.save_button.isEnabled()
-
-    def test_the_dialog_shows_the_delay_the_server_has_and_leaves_it_alone_if_unchanged(self, qt, server):
-        url, state = server
-        state.notify_after = 300
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        assert not dialog.notify_mode.isEnabled()  # not before the server has said what it is
-        wait_until(lambda: dialog.notify_mode.isEnabled())
-        assert (dialog.notify_mode.currentData(), dialog.notify_seconds.value()) == ("after", 300)
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-        assert state.settings_patches == []
-
-    def test_a_changed_delay_is_saved_on_the_server_when_the_dialog_is_accepted(self, qt, server):
-        url, state = server
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: dialog.notify_mode.isEnabled())
-        assert dialog.notify_mode.currentData() == "default" and not dialog.notify_seconds.isEnabled()
-        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("after"))
-        assert dialog.notify_seconds.isEnabled()
-        dialog.notify_seconds.setValue(90)
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-        assert state.notify_after == 90
-
-    def test_never_and_the_servers_delay_can_be_chosen_again(self, qt, server):
-        url, state = server
-        state.notify_after = 90
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: dialog.notify_mode.isEnabled())
-        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("never"))
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-        assert state.notify_after == 0
-        again = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: again.notify_mode.isEnabled())
-        assert again.notify_mode.currentData() == "never"
-        again.notify_mode.setCurrentIndex(again.notify_mode.findData("default"))
-        again.accept()
-        wait_until(lambda: again.result() == QDialog.DialogCode.Accepted)
-        assert state.notify_after is None
-
-    def test_a_server_that_refuses_the_delay_keeps_the_dialog_open_and_says_why(self, qt, server):
-        url, state = server
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: dialog.notify_mode.isEnabled())
-        state.signed_out = True  # the token is refused from now on
-        dialog.notify_mode.setCurrentIndex(dialog.notify_mode.findData("never"))
-        dialog.accept()
-        wait_until(lambda: "was not saved" in dialog.verdict.text())
-        assert dialog.result() != QDialog.DialogCode.Accepted and dialog.save_button.isEnabled()
-
-    def test_the_dialog_offers_the_models_and_saves_the_choice_for_the_app(self, qt, server):
-        url, state = server
-        state.offered_models = [
-            {"ref": "cloud:big", "name": "big", "provider_label": "Ollama API key", "weight": 8.75},
-            {"ref": "local:small", "name": "small", "provider_label": "Local host", "weight": 0.125},
-        ]
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        assert not dialog.model_box.isEnabled()  # not before the server has said which ones there are
-        wait_until(lambda: dialog.model_box.isEnabled())
-        assert [dialog.model_box.itemData(i) for i in range(dialog.model_box.count())] == [None, "cloud:big", "local:small"]
-        assert "fake-model" in dialog.model_box.itemText(0) and "0.4 credits per token" in dialog.model_box.itemText(0)
-        assert "8.75 credits per token" in dialog.model_box.itemText(1)
-        assert "0.125 credits per token" in dialog.model_box.itemText(2)
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-        assert state.model_requests == []  # unchanged: nothing is sent
-
-        again = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: again.model_box.isEnabled())
-        again.model_box.setCurrentIndex(again.model_box.findData("cloud:big"))
-        again.accept()
-        wait_until(lambda: again.result() == QDialog.DialogCode.Accepted)
-        assert state.model_choice == "cloud:big"
-
-        third = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: third.model_box.isEnabled())
-        assert third.model_box.currentData() == "cloud:big"  # what the server has is shown
-        third.model_box.setCurrentIndex(0)
-        third.accept()
-        wait_until(lambda: third.result() == QDialog.DialogCode.Accepted)
-        assert state.model_choice is None
-
-    def test_without_models_on_offer_the_choice_stays_the_servers(self, qt, server):
-        url, state = server
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: dialog._models_loaded)
-        assert not dialog.model_box.isEnabled() and "no other model is offered" in dialog.model_box.itemText(0)
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-        assert state.model_requests == []
-
-    def test_an_older_server_without_models_does_not_stop_the_dialog(self, qt, server):
-        url, state = server
-        state.models_known = False
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: all(not call.isRunning() for call in dialog._calls))
-        assert not dialog.model_box.isEnabled() and not dialog._models_loaded
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
-
-    def test_a_server_that_refuses_the_model_keeps_the_dialog_open_and_says_why(self, qt, server):
-        url, state = server
-        state.offered_models = [{"ref": "cloud:big", "name": "big", "provider_label": "Ollama API key", "weight": 8.75}]
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: dialog.model_box.isEnabled())
-        state.offered_models = []  # an administrator took it away meanwhile
-        dialog.model_box.setCurrentIndex(dialog.model_box.findData("cloud:big"))
-        dialog.accept()
-        wait_until(lambda: "model was not saved" in dialog.verdict.text())
-        assert dialog.result() != QDialog.DialogCode.Accepted and dialog.save_button.isEnabled()
-
-    def test_the_connection_can_be_saved_without_reaching_the_delay(self, qt):
-        with socket.socket() as sock:  # nobody listens: the delay cannot be read
-            sock.bind(("127.0.0.1", 0))
-            url = f"http://127.0.0.1:{sock.getsockname()[1]}"
-        dialog = dialog_for(url, password="", token=USER_TOKEN)
-        wait_until(lambda: not dialog._calls[0].isRunning())
-        assert not dialog.notify_mode.isEnabled()
-        dialog.accept()
-        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
 
     def test_a_saved_token_is_enough_to_save_again(self, qt, server):
         url, state = server

@@ -351,3 +351,136 @@ class ClaraApi:
         """Send this user a notification, on the surfaces in `targets` (empty: on all of theirs)."""
         body = {**self._identity(), "text": text, "title": title, "targets": targets or []}
         return self._call("POST", "/v1/notifications", json=body).json()
+
+    # -- who you are, what Clara remembers, the files she writes ---------------------------------- #
+
+    def me(self) -> dict:
+        """The signed-in user: `name`, `is_admin`, `person`, `accounts`, `usage`... (a user's token only)."""
+        return self._call("GET", "/v1/auth/me").json()
+
+    def facts(self) -> list[dict]:
+        """What Clara remembers about this person: `id`, `text`."""
+        return self._call("GET", "/v1/memory/facts", accept=(404,), params=self._identity()).json().get("facts", [])
+
+    def add_fact(self, text: str) -> dict:
+        return self._call("POST", "/v1/memory/facts", json={**self._identity(), "text": text}).json()
+
+    def delete_fact(self, fact_id: int) -> None:
+        self._call("DELETE", f"/v1/memory/facts/{int(fact_id)}", params=self._identity())
+
+    def markdown_files(self) -> list[dict]:
+        """The files Clara wrote for this person: `id`, `name`, `size`, `updated_at`."""
+        return self._call("GET", "/v1/markdown-files", params=self._identity()).json()["files"]
+
+    def markdown_file(self, file_id: int) -> dict:
+        """One of them, with its `text`."""
+        return self._call("GET", f"/v1/markdown-files/{int(file_id)}", params=self._identity()).json()
+
+    def delete_markdown_file(self, file_id: int) -> None:
+        self._call("DELETE", f"/v1/markdown-files/{int(file_id)}", params=self._identity())
+
+    # -- the account ------------------------------------------------------------------------------- #
+
+    def sessions(self) -> list[dict]:
+        """Where this user is signed in: `id`, `surface`, `device`, `address`, `created_at`, `last_used_at`, `current`."""
+        return self._call("GET", "/v1/auth/sessions").json()["sessions"]
+
+    def delete_session(self, session_id: str) -> None:
+        self._call("DELETE", f"/v1/auth/sessions/{quote(str(session_id), safe='')}")
+
+    def change_password(self, current: str, new: str) -> dict:
+        return self._call("POST", "/v1/auth/password", json={"current_password": current, "new_password": new}).json()
+
+    def link_code(self) -> dict:
+        """A code, valid for 10 minutes, that proves control of this account to another client."""
+        return self._call("POST", "/v1/accounts/link-code", json=self._identity()).json()
+
+    # -- administration (an administrator's token) --------------------------------------------------- #
+
+    def admin_users(self) -> list[dict]:
+        return self._call("GET", "/v1/admin/users").json()["users"]
+
+    def admin_add_user(self, name: str, password: str | None, admin: bool, discord_id: str | None) -> dict:
+        body = {"name": name, "password": password or None, "admin": admin, "discord_id": discord_id}
+        return self._call("POST", "/v1/admin/users", json=body).json()
+
+    def admin_change_user(self, name: str, **change: object) -> dict:
+        """`password`, `generate_password`, `admin`, `disabled`, `token_limit`, `follow_default_limit`."""
+        return self._call("PATCH", f"/v1/admin/users/{quote(name, safe='')}", json=change).json()
+
+    def admin_sign_out_user(self, name: str) -> dict:
+        return self._call("POST", f"/v1/admin/users/{quote(name, safe='')}/sign-out", json={}).json()
+
+    def admin_remove_user(self, name: str) -> None:
+        self._call("DELETE", f"/v1/admin/users/{quote(name, safe='')}")
+
+    def admin_limits(self) -> dict:
+        return self._call("GET", "/v1/admin/limits").json()
+
+    def admin_set_default_limit(self, tokens: int) -> dict:
+        return self._call("PUT", "/v1/admin/limits/default", json={"tokens": tokens}).json()
+
+    def admin_catalog(self, refresh: bool = False) -> dict:
+        return self._call("GET", "/v1/admin/catalog", read=60.0, params={"refresh": "true"} if refresh else {}).json()
+
+    def admin_change_catalog(self, refs: list[str], **change: object) -> dict:
+        return self._call("PATCH", "/v1/admin/catalog", json={"refs": refs, **change}).json()
+
+    def admin_set_discord_model(self, model: str | None) -> dict:
+        return self._call("PUT", "/v1/admin/catalog/discord", json={"model": model}).json()
+
+    def admin_status(self) -> dict:
+        return self._call("GET", "/v1/admin/status").json()
+
+    def admin_models(self) -> dict:
+        return self._call("GET", "/v1/admin/models", read=60.0).json()
+
+    def admin_people(self) -> list[dict]:
+        return self._call("GET", "/v1/admin/people").json()["people"]
+
+    def admin_person_facts(self, person: int) -> dict:
+        return self._call("GET", f"/v1/admin/people/{int(person)}/facts").json()
+
+    def admin_add_person_fact(self, person: int, text: str) -> dict:
+        return self._call("POST", f"/v1/admin/people/{int(person)}/facts", json={"text": text}).json()
+
+    def admin_delete_person_fact(self, person: int, fact: int) -> None:
+        self._call("DELETE", f"/v1/admin/people/{int(person)}/facts/{int(fact)}")
+
+    def admin_set_relation(self, person: int, relation: int | None) -> dict:
+        return self._call("PATCH", f"/v1/admin/people/{int(person)}", json={"relation": relation}).json()
+
+    def admin_footprint(self, person: int) -> dict:
+        return self._call("GET", f"/v1/admin/people/{int(person)}/footprint").json()
+
+    def admin_command(self, line: str) -> dict:
+        """Run a server console command: `output`, `quit`."""
+        return self._call("POST", "/v1/admin/command", read=120.0, json={"line": line}).json()
+
+    def admin_commands(self) -> list[dict]:
+        return self._call("GET", "/v1/admin/commands").json()
+
+    # -- Discord (an administrator's token) -------------------------------------------------------------- #
+
+    def discord(self) -> dict:
+        """`bot` (state, user, guilds...), `default_chime`, `spaces` (the servers) and `accounts` (signed in)."""
+        return self._call("GET", "/v1/admin/discord").json()
+
+    def discord_act(self, action: str) -> dict:
+        """`start`, `stop` or `restart` the bot built into the server."""
+        return self._call("POST", f"/v1/admin/discord/{quote(action, safe='')}", read=60.0, json={}).json()
+
+    def discord_default_chime(self, chime: bool) -> dict:
+        return self._call("PATCH", "/v1/admin/spaces", json={"default_chime": chime}).json()
+
+    def discord_space_chime(self, space: str, chime: bool | None) -> dict:
+        return self._call("PATCH", f"/v1/admin/spaces/{quote(space, safe='')}", json={"chime": chime}).json()
+
+    def discord_sign_out(self, discord_user: str) -> None:
+        self._call("DELETE", f"/v1/admin/discord/accounts/{quote(str(discord_user), safe='')}")
+
+    def discord_sign_in(self, discord_user: str, user: str) -> dict:
+        return self._call("POST", "/v1/admin/discord/accounts", json={"user_id": discord_user, "user": user}).json()
+
+    def discord_members(self, query: str) -> dict:
+        return self._call("GET", "/v1/admin/discord/members", params={"q": query}).json()

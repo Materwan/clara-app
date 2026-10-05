@@ -1,12 +1,14 @@
-"""The chat window: the conversation, a box to write in, documents to attach, a few buttons, the project the
-chats are in, and the list of conversations at its side (hidden until ☰ is clicked).
+"""The window: the frame of the web site (a rail with Clara's portrait, a new chat, the pages you work in, your
+conversations grouped by day and by project, and you), the chat, and the other pages beside it.
 
-The project chosen above the conversation decides where a new chat goes and which conversations the list shows
-(those of the project, or those in none); its files are on the server, which gives them to Clara."""
+The window talks to the server for the chat and the conversations; the pages are made when they are first opened and
+talk to it themselves. A project is chosen by the conversations (a project's group in the rail), and a new chat in a
+project starts from the project's page."""
 
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -14,11 +16,10 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
-    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -31,20 +32,22 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME
 from .api import ClaraApi, new_conversation
-from .chat_view import CLARA, ERROR, NOTE, USER, ChatView, MessageBubble
+from .chat_view import CLARA, ERROR, NOTE, USER, ChatView, MessageBubble, tool_note
 from .config import Config
 from .documents import FILTER, MAX_TOTAL_CHARS, Document, compose, split_message, total_chars
-from .history import SIDEBAR_WIDTH, HistoryPanel, display_title
+from .history import HistoryPanel, display_title
 from .icon import make_icon
-from .projects_dialog import ProjectsDialog
-from .tasks_dialog import TasksDialog
+from .icons import bind_icon
 from .qcm import QcmCard, display_answers
+from .shell import Shell
+from .theme import THEME, set_property
+from .widgets import Page
 from .workers import CallWorker, ChatWorker, DocumentWorker
 
 FLUSH_MS = 40  # streamed text is drawn at most this often
-MAX_INPUT_LINES = 5
-GREETING = "Hi! Ask me anything."
+MAX_INPUT_LINES = 6
 REMINDER_DUE = "[Reminder due] "  # what the server puts in a conversation when a reminder set there comes due
+WINDOW_SIZE = QSize(1120, 740)
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~&])")
 
@@ -55,14 +58,20 @@ def literal(text: str) -> str:
     return escaped.replace("\r\n", "\n").replace("\n", "  \n")  # two spaces: a line break, not a space
 
 
+def greeting(now: datetime | None = None) -> str:
+    hour = (now or datetime.now()).hour
+    return "Hello" if hour < 5 else "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+
+
 class InputBox(QPlainTextEdit):
     """Enter sends, Shift+Enter starts a new line. Grows with its text, up to a few lines."""
 
     submitted = Signal()
+    focus_changed = Signal(bool)
 
     def __init__(self):
         super().__init__()
-        self.setPlaceholderText("Write to Clara…   (Enter sends, Shift+Enter for a new line)")
+        self.setPlaceholderText("Message Clara")
         self.setTabChangesFocus(True)
         self.textChanged.connect(self._fit)
         self._fit()
@@ -71,7 +80,7 @@ class InputBox(QPlainTextEdit):
         lines = max(1, min(MAX_INPUT_LINES, round(self.document().size().height())))
         metrics = self.fontMetrics()
         margin = int(self.document().documentMargin() * 2) + 2 * self.frameWidth()
-        self.setFixedHeight(metrics.lineSpacing() * lines + margin + 4)
+        self.setFixedHeight(metrics.lineSpacing() * lines + margin + 14)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
@@ -81,9 +90,41 @@ class InputBox(QPlainTextEdit):
             return
         super().keyPressEvent(event)
 
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.focus_changed.emit(True)
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.focus_changed.emit(False)
+
+
+class ChatPage(Page):
+    """The conversation and the box to write in."""
+
+    page_title = "New chat"
+
+    def __init__(self, window: "ChatWindow"):
+        super().__init__()
+        self.window_ = window
+        self.more_button = QToolButton()
+        self.more_button.setToolTip("Conversation actions")
+        bind_icon(self.more_button, "more", "muted", 20)
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_button.clicked.connect(window.show_conversation_menu)
+        self.more_button.hide()
+
+    def actions(self) -> list[QWidget]:
+        return [self.more_button]
+
+    def activated(self) -> None:
+        self.window_.input.setFocus()
+
 
 class ChatWindow(QMainWindow):
-    settings_requested = Signal()
+    settings_requested = Signal()  # the connection must be set up (or changed)
+    theme_chosen = Signal(str)  # "auto", "light" or "dark"
+    signed_out = Signal()  # the user asked to forget the sign-in on this computer
 
     def __init__(self, get_config: Callable[[], Config], api_factory: Callable[[Config], ClaraApi] = ClaraApi):
         super().__init__()
@@ -103,107 +144,126 @@ class ChatWindow(QMainWindow):
         self._placed = False
         self.documents: list[Document] = []  # attached to the next message
         self._readers: list[DocumentWorker] = []  # files being read
-        self.project: int | None = None  # where new chats go, and whose conversations are listed
+        self.project: int | None = None  # where the next new chat goes (None: in none)
         self.project_names: dict[int, str] = {}
-        self._tasks_dialog: TasksDialog | None = None  # the open tasks dialog, if any
+        self.server_state: str | None = None
+        self.models: dict | None = None  # what the server offers to choose from, once known
 
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(make_icon())
-        self.resize(460, 640)
-        self.setMinimumSize(QSize(340, 360))
+        self.resize(WINDOW_SIZE)
+        self.setMinimumSize(QSize(380, 480))
 
-        self.history_button = QToolButton()
-        self.history_button.setText("☰")
-        self.history_button.setCheckable(True)
-        self.history_button.setToolTip("Your conversations")
-        self.history_button.toggled.connect(self.show_history)
-        title = QLabel(f"<b>{APP_NAME}</b>")
-        self.status = QLabel("")
-        self.status.setStyleSheet("color: gray;")
-        self.new_chat_button = QPushButton("New chat")
-        self.new_chat_button.setToolTip("Start a new conversation (the others stay in the list ☰)")
-        self.new_chat_button.clicked.connect(self.new_chat)
-        self.settings_button = QPushButton("Settings")
-        self.settings_button.clicked.connect(self.settings_requested)
-        header = QHBoxLayout()
-        header.addWidget(self.history_button)
-        header.addWidget(title)
-        header.addWidget(self.status, 1)
-        header.addWidget(self.new_chat_button)
-        header.addWidget(self.settings_button)
-
-        self.project_box = QComboBox()
-        self.project_box.setToolTip(
-            "The project of your chats: Clara uses its files and instructions, and ☰ lists its conversations"
-        )
-        self.project_box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.project_box.setMinimumContentsLength(14)
-        self.project_box.addItem("No project", None)
-        self.project_box.currentIndexChanged.connect(self._project_chosen)
-        self.projects_button = QPushButton("Projects…")
-        self.projects_button.setToolTip("Make projects and give them files, folders and GitHub repositories")
-        self.projects_button.clicked.connect(self.open_projects)
-        self.tasks_button = QPushButton("Tasks…")
-        self.tasks_button.setToolTip("Your to-do list, with Clara's reminders")
-        self.tasks_button.clicked.connect(self.open_tasks)
-        project_row = QHBoxLayout()
-        project_row.addWidget(QLabel("Project:"))
-        project_row.addWidget(self.project_box, 1)
-        project_row.addWidget(self.projects_button)
-        project_row.addWidget(self.tasks_button)
-
+        # ---- the chat page ------------------------------------------------------------------------------
         self.view = ChatView()
         self.input = InputBox()
         self.input.submitted.connect(self.send)
         self.attach_button = QToolButton()
-        self.attach_button.setText("📎")
         self.attach_button.setToolTip("Attach documents: PDF, code (Python, C…), Markdown, text. You can also drop files here.")
+        bind_icon(self.attach_button, "clip", "muted", 20)
         self.attach_button.clicked.connect(self.choose_documents)
-        self.send_button = QPushButton("Send")
-        self.send_button.setDefault(True)
+        self.doc_info = QPushButton("")
+        self.doc_info.hide()
+        self.model_box = QComboBox()
+        self.model_box.setProperty("flat", True)
+        self.model_box.setToolTip("The model Clara answers you with here (an administrator chooses which are offered)")
+        self.model_box.hide()
+        self.model_box.activated.connect(self._model_chosen)
+        self.send_button = QPushButton()
+        self.send_button.setProperty("kind", "send")
+        self.send_button.setFixedSize(40, 40)
+        self.send_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.send_button.setToolTip("Send")
+        bind_icon(self.send_button, "send", "accent_ink", 20)
         self.send_button.clicked.connect(self._send_or_stop)
-        row = QHBoxLayout()
-        row.addWidget(self.attach_button, 0, Qt.AlignmentFlag.AlignBottom)
-        row.addWidget(self.input, 1)
-        row.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignBottom)
 
         self.attachments = QWidget()  # one removable chip per attached document
         self._chips = QHBoxLayout(self.attachments)
-        self._chips.setContentsMargins(0, 0, 0, 0)
+        self._chips.setContentsMargins(4, 0, 4, 0)
         self._chips.addStretch(1)
         self.attachments.hide()
 
+        self.composer = QFrame()
+        self.composer.setObjectName("composer")
+        box = QVBoxLayout(self.composer)
+        box.setContentsMargins(10, 8, 10, 8)
+        box.setSpacing(4)
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        bar.addWidget(self.attach_button)
+        bar.addStretch(1)
+        bar.addWidget(self.model_box)
+        bar.addWidget(self.send_button)
+        box.addWidget(self.attachments)
+        box.addWidget(self.input)
+        box.addLayout(bar)
+        self.input.focus_changed.connect(lambda focused: set_property(self.composer, "focused", focused))
+
+        self.chat_page = ChatPage(self)
+        page = QVBoxLayout(self.chat_page)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
+        page.addWidget(self.view, 1)
+        wrap = QHBoxLayout()
+        wrap.setContentsMargins(24, 0, 24, 18)
+        frame = QWidget()
+        frame.setMaximumWidth(920)
+        inner = QVBoxLayout(frame)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.addWidget(self.composer)
+        wrap.addStretch(1)
+        wrap.addWidget(frame, 100)
+        wrap.addStretch(1)
+        page.addLayout(wrap)
+
+        # ---- the rail's list, and the frame ------------------------------------------------------------------
         self.history = HistoryPanel()
-        self.history.hide()
         self.history.chosen.connect(self.open_conversation)
-        self.history.new_chat_requested.connect(self.new_chat)
+        self.history.project_opened.connect(self.open_project)
         self.history.search_changed.connect(self.refresh_history)
         self.history.rename_requested.connect(self.rename_conversation)
         self.history.pin_requested.connect(self.pin_conversation)
         self.history.move_requested.connect(self.move_conversation)
         self.history.delete_requested.connect(self.delete_conversation)
 
-        chat = QVBoxLayout()
-        chat.addLayout(header)
-        chat.addLayout(project_row)
-        chat.addWidget(self.view, 1)
-        chat.addWidget(self.attachments)
-        chat.addLayout(row)
-        body = QWidget()
-        layout = QHBoxLayout(body)
-        layout.setContentsMargins(10, 8, 10, 10)
-        layout.addWidget(self.history)
-        layout.addLayout(chat, 1)
-        self.setCentralWidget(body)
+        self.shell = Shell(self.history, self._factories())
+        self.shell.new_chat_requested.connect(self._new_chat_clicked)
+        self.shell.page_changed.connect(self._page_changed)
+        self.setCentralWidget(self.shell)
+        self.shell.show_page("chat")
         self.setAcceptDrops(True)
 
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.setInterval(FLUSH_MS)
         self._flush_timer.timeout.connect(self._flush)
+        THEME.changed.connect(self._set_busy_icon)
 
-        self.view.add(NOTE, GREETING)
+        self._show_welcome()
         self.set_state(None)
+        self.set_user_label()
+
+    def _factories(self) -> dict[str, Callable[[], Page]]:
+        """How each page other than the chat is made, the first time it is opened."""
+        from .account_page import AccountPage
+        from .admin_page import AdminPage
+        from .discord_page import DiscordPage
+        from .files_page import FilesPage
+        from .memory_page import MemoryPage
+        from .projects_page import ProjectsPage
+        from .tasks_page import TasksPage
+
+        args = (self._get_config, self._api_factory, self)
+        return {
+            "chat": lambda: self.chat_page,
+            "projects": lambda: ProjectsPage(*args),
+            "tasks": lambda: TasksPage(*args),
+            "files": lambda: FilesPage(*args),
+            "memory": lambda: MemoryPage(*args),
+            "account": lambda: AccountPage(*args),
+            "discord": lambda: DiscordPage(*args),
+            "admin": lambda: AdminPage(*args),
+        }
 
     # -- state ------------------------------------------------------------------------ #
 
@@ -211,36 +271,55 @@ class ChatWindow(QMainWindow):
     def busy(self) -> bool:
         return self._worker is not None
 
+    def config(self) -> Config:
+        return self._get_config()
+
+    def display_name(self) -> str:
+        config = self._get_config()
+        return config.user_name or config.user_id or APP_NAME
+
+    def set_user_label(self) -> None:
+        self.shell.set_user(self.display_name(), "")
+
     def set_state(self, state: str | None) -> None:
         """What the status line says about the server: "running", "stopping", "down", or None (not known yet)."""
-        text, color = {
-            "running": ("● Clara is running", "#1b7f3b"),
-            "stopping": ("◐ Clara is stopping", "#b26a00"),
-            "down": ("○ Clara is not running", "#b3261e"),
-            None: ("", "gray"),
-        }[state]
-        self.status.setText(text)
-        self.status.setStyleSheet(f"color: {color};")
+        self.server_state = state
+        text = {"running": "Clara is running", "stopping": "Clara is stopping", "down": "Clara is not running"}.get(state or "", "")
+        self.shell.set_status(text, state)
 
     def _set_busy(self, busy: bool) -> None:
-        self.send_button.setText("Stop" if busy else "Send")
+        self.send_button.setProperty("kind", "stop" if busy else "send")
+        self.send_button.style().unpolish(self.send_button)
+        self.send_button.style().polish(self.send_button)
+        self.send_button.setToolTip("Stop the answer" if busy else "Send")
+        self._set_busy_icon()
         # the answer is kept on the server only once it is complete: no leaving it halfway
-        self.new_chat_button.setEnabled(not busy)
-        self.project_box.setEnabled(not busy)  # the answer belongs to the conversation shown
+        self.shell.new_chat.setEnabled(not busy)
+        self.model_box.setEnabled(not busy)  # the answer belongs to the conversation shown
         self.history.set_locked(busy)
+
+    def _set_busy_icon(self) -> None:
+        busy = self.busy
+        from .icons import icon
+
+        self.send_button.setIcon(icon("stop" if busy else "send", "bg" if busy else "accent_ink", 20))
+        self.send_button.setIconSize(QSize(20, 20))
 
     # -- showing the window --------------------------------------------------------------- #
 
     def bring_to_front(self) -> None:
-        if not self._placed:  # the first time: near the notification area, where the user clicked
+        if not self._placed:  # the first time: in the middle of the screen
             self._placed = True
             area = QGuiApplication.primaryScreen().availableGeometry()
-            self.move(area.right() - self.width() - 16, area.bottom() - self.height() - 16)
+            size = self.size().boundedTo(area.size())
+            self.resize(size)
+            self.move(area.center().x() - size.width() // 2, area.center().y() - size.height() // 2)
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
         self.show()
         self.raise_()
         self.activateWindow()
-        self.input.setFocus()
+        if self.shell.current == "chat":
+            self.input.setFocus()
 
     def toggle(self) -> None:
         if self.isVisible() and not self.isMinimized() and self.isActiveWindow():
@@ -252,6 +331,8 @@ class ChatWindow(QMainWindow):
         """From now on closing the window really closes it."""
         self._quitting = True
         self.cancel()
+        for page in self.shell.pages.values():
+            page.shutdown()
         for worker in [*self._calls, *self._readers]:
             worker.wait(5000)
         for worker in self._calls:
@@ -266,8 +347,56 @@ class ChatWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
-        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow() and self.shell.current == "chat":
             self.input.setFocus()
+
+    # -- going to a page -------------------------------------------------------------------- #
+
+    def go(self, name: str) -> None:
+        """Show a page (`chat`, `projects`, `tasks`, `files`, `memory`, `account`, `discord`, `admin`)."""
+        self.shell.show_page(name)
+
+    def _page_changed(self, name: str) -> None:
+        if name == "chat":
+            self.input.setFocus()
+
+    def open_tasks(self) -> None:
+        if not self._get_config().ready:
+            self.settings_requested.emit()
+            return
+        self.go("tasks")
+
+    def open_projects(self) -> None:
+        if not self._get_config().ready:
+            self.settings_requested.emit()
+            return
+        self.go("projects")
+
+    def open_project(self, project: int) -> None:
+        self.go("projects")
+        self.shell.pages["projects"].show_project(project)
+
+    def chat_in_project(self, project: int) -> None:
+        """A new chat in a project (from its page)."""
+        if self.busy:
+            return
+        self.go("chat")
+        self.new_chat(project)
+
+    def projects_changed(self) -> None:
+        self.refresh_projects()
+
+    def set_theme(self, preference: str) -> None:
+        """Light, dark or the way Windows is set (kept by the app's settings)."""
+        THEME.apply(preference)
+        self.theme_chosen.emit(preference)
+
+    def sign_out(self) -> None:
+        self.signed_out.emit()
+
+    def _new_chat_clicked(self) -> None:
+        self.go("chat")
+        self.new_chat()
 
     # -- talking ------------------------------------------------------------------------------ #
 
@@ -309,6 +438,7 @@ class ChatWindow(QMainWindow):
         )
         self._worker.token.connect(self._on_token)
         self._worker.qcm.connect(self._on_qcm)
+        self._worker.tool.connect(self._on_tool)
         self._worker.answered.connect(self._on_answered)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._worker_finished)
@@ -327,6 +457,11 @@ class ChatWindow(QMainWindow):
         self._reply_text += text
         if not self._flush_timer.isActive():
             self._flush_timer.start()
+
+    def _on_tool(self, event: dict) -> None:
+        note = tool_note(event)
+        if note and self._reply is not None:
+            self._reply.add_note(*note)
 
     def _on_qcm(self, form: dict) -> None:
         self._flush()
@@ -412,6 +547,14 @@ class ChatWindow(QMainWindow):
     def _show_title(self) -> None:
         info = self.history.info(self.conversation)
         self.setWindowTitle(f"{APP_NAME} — {display_title(info)}" if info else APP_NAME)
+        self.chat_page.set_title(display_title(info) if info else "New chat")
+        self.chat_page.more_button.setVisible(info is not None)
+
+    def _show_welcome(self) -> None:
+        name = self.project_names.get(self.project) if self.project is not None else None
+        title = f"{greeting()}, {self.display_name()}"
+        text = f"A new chat in {name}: Clara can use its files and instructions." if name else "What would you like to talk about?"
+        self.view.set_welcome(title, text)
 
     def start_history(self) -> None:
         """When the app starts or its settings change: a new chat, then the last conversation as soon as the
@@ -420,26 +563,19 @@ class ChatWindow(QMainWindow):
         self._open_latest = True
         self.refresh_history()
         self.refresh_projects()
+        self.refresh_identity()
+        self.refresh_models()
+        self.set_user_label()
 
-    def show_history(self, shown: bool) -> None:
-        """Show or hide the list of conversations; the window grows to its left to make room for it."""
-        if shown == self.history.isVisible():
-            return
-        if self.history_button.isChecked() != shown:
-            self.history_button.setChecked(shown)  # comes back here, with nothing left to do
-            return
-        change = SIDEBAR_WIDTH + 6 if shown else -(SIDEBAR_WIDTH + 6)
-        self.history.setVisible(shown)
-        self.new_chat_button.setVisible(not shown)  # the list has its own
-        if not (self.isMaximized() or self.isFullScreen()):
-            geometry = self.geometry()
-            left = geometry.left() - change
-            screen = self.screen().availableGeometry() if self.screen() else None
-            if screen is not None:
-                left = max(screen.left(), left)
-            self.setGeometry(left, geometry.top(), geometry.width() + change, geometry.height())
-        if shown:
-            self.refresh_history()
+    def refresh_identity(self) -> None:
+        """Who the server says is signed in: an administrator sees the pages of administration."""
+
+        def known(me: object, error: str) -> None:
+            admin = bool(not error and isinstance(me, dict) and me.get("is_admin"))
+            self.shell.set_admin(admin)
+
+        if self._get_config().ready:
+            self._call(lambda api: api.me(), known)
 
     def refresh_history(self, *_) -> None:
         """Fetch the list of conversations again (what the search box holds)."""
@@ -450,15 +586,14 @@ class ChatWindow(QMainWindow):
             return
         self._listing = True
         query = self.history.search.text().strip()
-        project = self.project or "none"
-        self._call(lambda api: api.conversations(query, project), self._listed)
+        self._call(lambda api: api.conversations(query), self._listed)
 
     def _listed(self, conversations: object, error: str) -> None:
         self._listing = False
         if error:
             self.history.show_error(error)
         else:
-            self.history.show_conversations(conversations, self.conversation)
+            self.history.show_conversations(conversations, self.conversation, projects=self.project_names)
             self._show_title()
             if self._open_latest and not self.history.search.text().strip():
                 self._open_latest = False
@@ -473,6 +608,7 @@ class ChatWindow(QMainWindow):
 
     def open_conversation(self, conversation: str) -> None:
         """Show a conversation of the list, to read it or to go on with it."""
+        self.go("chat") if self.shell.current != "chat" else None
         if self.busy or conversation == self.conversation and self._opening is None:
             return
         self._opening = conversation
@@ -492,6 +628,7 @@ class ChatWindow(QMainWindow):
             self.view.add(ERROR, literal(f"Could not open the conversation: {error}"))
             return
         self.conversation = conversation
+        self.project = (self.history.info(conversation) or {}).get("project")
         self.view.clear()
         if shown.get("summary"):
             self.view.add(NOTE, "**Earlier in this conversation** (summary)  \n" + literal(shown["summary"]))
@@ -510,22 +647,22 @@ class ChatWindow(QMainWindow):
                 for form in message.get("qcm") or []:
                     self._add_qcm(form, form.get("answers"))
         if not shown.get("messages") and not shown.get("summary"):
-            self.view.add(NOTE, GREETING)
+            self._show_welcome()
         self.history.set_current(self.conversation)
         self._show_title()
         self.input.setFocus()
 
-    def new_chat(self) -> None:
+    def new_chat(self, project: int | None = None) -> None:
         """An empty chat: the conversation shown stays in the list, the new one joins it with its first message
-        (in the project chosen above)."""
+        (in `project`, when one is given)."""
         if self.busy:
             return
         self._opening = None
         self._open_latest = False
         self.conversation = None
+        self.project = project
         self.view.clear()
-        name = self.project_names.get(self.project) if self.project is not None else None
-        self.view.add(NOTE, f"{GREETING}  \nThis chat is in the project **{literal(name)}**: I can use its files." if name else GREETING)
+        self._show_welcome()
         self.history.set_current(None)
         self._show_title()
         self.input.setFocus()
@@ -543,6 +680,15 @@ class ChatWindow(QMainWindow):
             self.refresh_history()  # without a title (the model failed), it is asked for after the next answer
 
         self._call(lambda api: api.title(conversation), titled)
+
+    def show_conversation_menu(self) -> None:
+        """The "…" of the page header: the menu of the conversation shown."""
+        if self.conversation is None or self.history.info(self.conversation) is None:
+            return
+        menu = self.history.menu_for(self.conversation)
+        button = self.chat_page.more_button
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        menu.deleteLater()
 
     def rename_conversation(self, conversation: str) -> None:
         info = self.history.info(conversation) or {}
@@ -580,7 +726,7 @@ class ChatWindow(QMainWindow):
             if error:
                 self.history.show_error(error)
             elif conversation == self.conversation:
-                self.select_project(target, new_chat=False)  # the conversation shown goes with it
+                self.project = target  # the conversation shown goes with it
             self.refresh_history()
 
         self._call(lambda api: api.update_conversation(conversation, project=target), moved)
@@ -588,7 +734,7 @@ class ChatWindow(QMainWindow):
     # -- projects ------------------------------------------------------------------------------ #
 
     def refresh_projects(self) -> None:
-        """Fetch the user's projects again, for the list above the conversation."""
+        """Fetch the user's projects again, to name the groups of the rail."""
         if self._get_config().ready:
             self._call(lambda api: api.projects(), self._projects_listed)
 
@@ -596,74 +742,13 @@ class ChatWindow(QMainWindow):
         if error or not isinstance(projects, list):
             return
         self.project_names = {project["id"]: project["name"] for project in projects}
-        self.project_box.blockSignals(True)
-        self.project_box.clear()
-        self.project_box.addItem("No project", None)
-        for project_id, name in self.project_names.items():
-            self.project_box.addItem(name, project_id)
-        self.project_box.blockSignals(False)
         if self.project not in self.project_names:  # deleted meanwhile
             self.project = None
-            self.refresh_history()
-        self._show_project()
-
-    def _show_project(self) -> None:
-        index = self.project_box.findData(self.project) if self.project is not None else 0
-        self.project_box.blockSignals(True)
-        self.project_box.setCurrentIndex(max(0, index))
-        self.project_box.blockSignals(False)
-
-    def _project_chosen(self, index: int) -> None:
-        project = self.project_box.itemData(index)
-        if project == self.project:
-            return
-        if self.busy:
-            self._show_project()  # not while Clara writes
-            return
-        self.select_project(project)
-
-    def select_project(self, project: int | None, new_chat: bool = True) -> None:
-        """Chat in a project (None: in none): a new chat goes in it, and ☰ lists its conversations."""
-        self.project = project
-        self._show_project()
-        self._open_latest = False
-        if new_chat:
-            self.new_chat()
-        self.refresh_history()
-
-    def open_projects(self) -> None:
-        if not self._get_config().ready:
-            self.settings_requested.emit()
-            return
-        dialog = ProjectsDialog(self._get_config, self._api_factory, self, select=self.project)
-        dialog.changed.connect(self.refresh_projects)
-
-        def chat_in(project: int) -> None:
-            dialog.done(QDialog.DialogCode.Accepted)
-            self.refresh_projects()
-            if not self.busy:
-                self.select_project(project)
-
-        dialog.chat_requested.connect(chat_in)
-        dialog.finished.connect(dialog.deleteLater)
-        dialog.open()
-
-    def open_tasks(self) -> None:
-        if not self._get_config().ready:
-            self.settings_requested.emit()
-            return
-        if self._tasks_dialog is not None:  # one at a time: bring it back
-            self._tasks_dialog.raise_()
-            self._tasks_dialog.activateWindow()
-            return
-        dialog = self._tasks_dialog = TasksDialog(self._get_config, self._api_factory, self)
-
-        def closed() -> None:
-            self._tasks_dialog = None
-            dialog.deleteLater()
-
-        dialog.finished.connect(closed)
-        dialog.open()
+        self.history.show_conversations(
+            list(self.history.conversations.values()), self.conversation, projects=self.project_names
+        )
+        if not self.view.bubbles:
+            self._show_welcome()
 
     def delete_conversation(self, conversation: str) -> None:
         info = self.history.info(conversation) or {}
@@ -684,6 +769,33 @@ class ChatWindow(QMainWindow):
             self.refresh_history()
 
         self._call(lambda api: api.delete_conversation(conversation), deleted)
+
+    # -- the model ------------------------------------------------------------------------------ #
+
+    def refresh_models(self) -> None:
+        """The models an administrator offers: when there are some, a quiet picker appears in the box."""
+        if self._get_config().ready:
+            self._call(lambda api: api.models(), self._models_listed)
+
+    def _models_listed(self, info: object, error: str) -> None:
+        if error or not isinstance(info, dict):
+            return
+        self.models = info
+        offered = info.get("models") or []
+        self.model_box.blockSignals(True)
+        self.model_box.clear()
+        default = info.get("default") or {}
+        self.model_box.addItem(f"Server default: {default.get('name', '')}".strip(": "), None)
+        for model in offered:
+            self.model_box.addItem(f"{model['name']} ({model['provider_label']})", model["ref"])
+        own = (info.get("choices") or {}).get("app")
+        self.model_box.setCurrentIndex(max(0, self.model_box.findData(own)))
+        self.model_box.blockSignals(False)
+        self.model_box.setVisible(bool(offered))
+
+    def _model_chosen(self, index: int) -> None:
+        ref = self.model_box.itemData(index)
+        self._call(lambda api: api.choose_model(ref), lambda _r, error: self.history.show_error(error) if error else None)
 
     # -- documents ----------------------------------------------------------------------------- #
 
@@ -743,7 +855,7 @@ class ChatWindow(QMainWindow):
                 item.widget().deleteLater()
         for document in self.documents:
             chip = QPushButton(f"📎 {document.name} · {document.size}  ✕")
-            chip.setFlat(True)
+            chip.setProperty("kind", "chip")
             chip.setToolTip(f"{document.path}\nClick to remove it from the message.")
             chip.clicked.connect(lambda _=False, d=document: self.detach(d))
             self._chips.insertWidget(self._chips.count() - 1, chip)
@@ -766,6 +878,7 @@ class ChatWindow(QMainWindow):
         files = self._files(event)
         if files:
             event.acceptProposedAction()
+            self.go("chat")
             self.attach(files)
 
     # -- reminders and notifications -------------------------------------------------------------- #

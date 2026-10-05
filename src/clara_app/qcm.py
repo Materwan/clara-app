@@ -64,29 +64,6 @@ def grade(form: dict, answers: list) -> tuple[int, int]:
         asked += 1
         right += sorted(answer or []) == question["correct"]
     return right, asked
-
-
-STYLE = """
-QLabel { color: palette(text); }
-QFrame#qcm { background: palette(base); border: 1px solid palette(mid); border-radius: 12px; }
-QLabel#qcm-title { font-weight: 700; font-size: 14px; }
-QLabel#qcm-question { font-weight: 600; }
-QLabel#qcm-letter { color: palette(placeholder-text); font-weight: 700; }
-QLabel#qcm-hint, QLabel#qcm-progress, QLabel#qcm-score { color: palette(placeholder-text); }
-QLabel#qcm-score { color: palette(text); font-weight: 600; }
-QLabel#qcm-explain { background: palette(alternate-base); border-radius: 6px; padding: 5px 8px; }
-QFrame#qcm-explain { background: palette(alternate-base); border-radius: 6px; }
-QFrame#qcm-option { border: 1px solid palette(midlight); border-radius: 8px; }
-QFrame#qcm-option[picked="true"] { border-color: #3d5afe; }
-QFrame#qcm-option[state="right"] { background: #e3f1e4; border-color: #5fa564; }
-QFrame#qcm-option[state="wrong"] { background: #fdecea; border-color: #e0877d; }
-QFrame#qcm-option[state="missed"] { border: 1px dashed #5fa564; }
-QFrame#qcm-option[state="right"] QLabel, QFrame#qcm-option[state="wrong"] QLabel { color: #1f2a20; }
-QLabel#qcm-verdict[ok="true"] { color: #2f7a39; font-weight: 600; }
-QLabel#qcm-verdict[ok="false"] { color: #b2382b; font-weight: 600; }
-"""
-
-
 class _OptionRow(QFrame):
     """An option: its button and its text (which wraps, as a radio button's own text does not). A click anywhere on
     the row selects it, whether the text is a label or a web view with formulas."""
@@ -113,7 +90,6 @@ class QcmCard(QFrame):
     def __init__(self, form: dict, answers: list | None = None, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("qcm")
-        self.setStyleSheet(STYLE)
         self.form = form
         self.answers = answers
         self._draft: list = [empty_answer(q) for q in form["questions"]]
@@ -222,8 +198,7 @@ class QcmCard(QFrame):
         layout.addWidget(letter)
         shown = question["options"][at]
         if mathview.available() and mathview.has_math(shown):
-            dark = row.property("state") in ("right", "wrong")  # on a tinted row the text is dark in any theme
-            text: QWidget = mathview.MathView(shown, color="#1f2a20" if dark else None)
+            text: QWidget = mathview.MathView(shown, color=None)
             text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # the row takes the click
         else:
             text = QLabel(shown)

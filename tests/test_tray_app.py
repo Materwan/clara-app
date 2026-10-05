@@ -205,7 +205,7 @@ class TestNotifications:
         application.window.bring_to_front = lambda: opened.append("window")
         application.window.open_tasks = lambda: opened.append("tasks")
         application.tray.tasks_requested.emit()
-        assert opened == ["window", "tasks"]  # the window first: the dialog belongs to it
+        assert opened == ["window", "tasks"]  # the window first, then its page
         application.quit()
 
     def test_a_task_reminder_pops_up_with_the_title_of_its_task(self, qt, tmp_path, config):
@@ -327,15 +327,15 @@ class TestApplication:
         application.tray.notify = lambda title, text: shown.append((title, text))
 
         application._server_said("running")  # finding all well: nothing to say
-        assert shown == [] and application.window.status.text() == "● Clara is running"
+        assert shown == [] and application.window.shell._me_status.text() == "Clara is running"
         application._server_said("running")
         application._server_said("stopping")
         assert shown == [("Clara", "Clara is stopping: she finishes what is running and takes nothing new.")]
-        assert application.window.status.text() == "◐ Clara is stopping"
+        assert application.window.shell._me_status.text() == "Clara is stopping"
         application._server_said("stopped")
         application._connection(False)  # the stream ends right after: already known
         assert shown[-1] == ("Clara", "Clara is not running.") and len(shown) == 2
-        assert application.window.status.text() == "○ Clara is not running"
+        assert application.window.shell._me_status.text() == "Clara is not running"
         assert application.tray.toolTip() == "Clara is not running"
         application._server_said("running")
         assert shown[-1] == ("Clara", "Clara is running again.") and len(shown) == 3
@@ -368,14 +368,14 @@ class TestApplication:
             "Clara is not running.",
             "Clara is running again.",
         ]
-        assert application.server_state == "running" and "running" in application.window.status.text()
+        assert application.server_state == "running" and "running" in application.window.shell._me_status.text()
         application.quit()
 
     def test_started_by_windows_it_stays_in_the_tray(self, qt, tmp_path, config, server):
         application = self.make(qt, tmp_path, config)
         application.start(background=True)
         assert not application.window.isVisible()
-        wait_until(lambda: "running" in application.window.status.text())
+        wait_until(lambda: "running" in application.window.shell._me_status.text())
         application.quit()
 
     def test_started_by_hand_it_opens_the_window(self, qt, tmp_path, config, server):
