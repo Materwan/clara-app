@@ -37,6 +37,7 @@ from .documents import FILTER, MAX_TOTAL_CHARS, Document, compose, split_message
 from .history import SIDEBAR_WIDTH, HistoryPanel, display_title
 from .icon import make_icon
 from .projects_dialog import ProjectsDialog
+from .qcm import QcmCard, display_answers
 from .workers import CallWorker, ChatWorker, DocumentWorker
 
 FLUSH_MS = 40  # streamed text is drawn at most this often
@@ -270,9 +271,11 @@ class ChatWindow(QMainWindow):
         else:
             self.send()
 
-    def send(self, text: str | None = None) -> None:
+    def send(self, text: str | None = None, direct: bool = False) -> None:
+        """Send the text of the box with the attached documents, or, given a text, that text. `direct`: only that
+        text (the answers of a QCM): the box and the documents waiting are left alone."""
         text = (self.input.toPlainText() if text is None else text).strip()
-        if not (text or self.documents) or self.busy:
+        if not (text or (self.documents and not direct)) or self.busy:
             return
         if self._readers:
             self.view.add(NOTE, "Still reading the attached documents… send again in a moment.")
@@ -286,10 +289,11 @@ class ChatWindow(QMainWindow):
             return
         if self.conversation is None:
             self.conversation = new_conversation(config.user_id)
-        documents, self.documents = self.documents, []
+        documents, self.documents = ([], self.documents) if direct else (self.documents, [])
         self._refresh_attachments()
-        self.input.clear()
-        shown = [literal(text)] if text else []
+        if not direct:
+            self.input.clear()
+        shown = [literal(display_answers(text))] if text else []
         shown += [f"📎 {literal(document.name)} ({document.size})" for document in documents]
         self.view.add(USER, "  \n".join(shown))
         self._reply = self.view.add(CLARA, "")
@@ -298,6 +302,7 @@ class ChatWindow(QMainWindow):
             self._api_factory(config), compose(text, documents), self.conversation, self, project=self.project
         )
         self._worker.token.connect(self._on_token)
+        self._worker.qcm.connect(self._on_qcm)
         self._worker.answered.connect(self._on_answered)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._worker_finished)
@@ -316,6 +321,27 @@ class ChatWindow(QMainWindow):
         self._reply_text += text
         if not self._flush_timer.isActive():
             self._flush_timer.start()
+
+    def _on_qcm(self, form: dict) -> None:
+        self._flush()
+        self._add_qcm(form)
+
+    def _add_qcm(self, form: dict, answers: list | None = None) -> None:
+        """A form of Clara's in the conversation: to fill in, or, with the answers the user gave, answered."""
+        card = QcmCard(form, answers)
+        if answers is None:
+            card.submitted.connect(lambda text, shown=card: self._submit_qcm(shown, text))
+        self.view.add_card(card)
+
+    def _submit_qcm(self, card: QcmCard, text: str) -> None:
+        if self.busy:
+            card.warn("Wait for Clara to finish, then send your answers.")
+            return
+        self.send(text, direct=True)
+        if self.busy:  # sent
+            card.lock()
+        else:
+            card.warn("The answers could not be sent just now: try again.")
 
     def _flush(self) -> None:
         if self._reply is not None:
@@ -467,11 +493,14 @@ class ChatWindow(QMainWindow):
             if message["role"] == "user" and message["content"].startswith(REMINDER_DUE):
                 self.add_reminder(message["content"][len(REMINDER_DUE):])  # Clara's announcement follows
             elif message["role"] == "user":
-                text, names = split_message(message["content"])
+                text, names = split_message(display_answers(message["content"]))
                 lines = [literal(text)] if text else []
                 self.view.add(USER, "  \n".join(lines + [f"📎 {literal(name)}" for name in names]))
             else:
-                self.view.add(CLARA, message["content"])
+                if message["content"]:
+                    self.view.add(CLARA, message["content"])
+                for form in message.get("qcm") or []:
+                    self._add_qcm(form, form.get("answers"))
         if not shown.get("messages") and not shown.get("summary"):
             self.view.add(NOTE, GREETING)
         self.history.set_current(self.conversation)

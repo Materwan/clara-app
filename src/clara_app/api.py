@@ -28,7 +28,9 @@ INSTRUCTIONS = (
     "You are talking through Clara's desktop app, a small chat window. "
     "Markdown is displayed, but keep answers short and conversational. "
     "The user can attach files (PDF, code, Markdown, text): their content comes in the message, each inside "
-    '<document name="..." type="..."> tags. Refer to them by name.'
+    '<document name="..." type="..."> tags. Refer to them by name. '
+    "To quiz the user or to collect several answers at once, call the qcm tool: the app shows it as a form "
+    "(radio buttons, check boxes or a text box) and their answers come back in their next message."
 )
 
 

@@ -20,9 +20,10 @@ RECONNECT_SECONDS = 5.0
 
 
 class ChatWorker(QThread):
-    """Runs one turn: `token` for each piece of the answer, then `answered`, or `failed` with a reason."""
+    """Runs one turn: `token` for each piece of the answer (and `qcm` for a form), then `answered`, or `failed`."""
 
     token = Signal(str)
+    qcm = Signal(dict)  # a form Clara asks the user to answer
     answered = Signal()
     failed = Signal(str)
 
@@ -49,6 +50,8 @@ class ChatWorker(QThread):
                 kind = event.get("type")
                 if kind == "token":
                     self.token.emit(event["text"])
+                elif kind == "qcm":
+                    self.qcm.emit(event["form"])
                 elif kind == "error":
                     self.failed.emit(str(event.get("message", "the server reported an error")))
                     return

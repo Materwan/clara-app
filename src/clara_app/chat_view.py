@@ -60,7 +60,8 @@ class ChatView(QScrollArea):
         self._column.addStretch(1)
         self.setWidget(self._inner)
         self.bubbles: list[MessageBubble] = []
-        self._rows: dict[MessageBubble, QHBoxLayout] = {}
+        self.cards: list[QWidget] = []  # forms (QCM) shown between the bubbles
+        self._rows: dict[QWidget, QHBoxLayout] = {}
         self._follow = True
         self.verticalScrollBar().rangeChanged.connect(self._range_changed)
         self.verticalScrollBar().valueChanged.connect(self._value_changed)
@@ -84,17 +85,36 @@ class ChatView(QScrollArea):
         self._follow = True
         return bubble
 
+    def add_card(self, card: QWidget) -> QWidget:
+        """Append a widget of Clara's (a QCM form) in a row of its own, as wide as a bubble."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(card)
+        row.addStretch(1)
+        self._column.insertLayout(self._column.count() - 1, row)
+        self.cards.append(card)
+        self._rows[card] = row
+        self._limit_card(card)
+        self._follow = True
+        return card
+
     def remove(self, bubble: MessageBubble) -> None:
-        row = self._rows.pop(bubble)
-        self._column.removeItem(row)
+        self._take(bubble)
         self.bubbles.remove(bubble)
-        bubble.hide()  # gone now, not only when Qt gets round to deleting it
-        bubble.deleteLater()
+
+    def _take(self, widget: QWidget) -> None:
+        row = self._rows.pop(widget)
+        self._column.removeItem(row)
+        widget.hide()  # gone now, not only when Qt gets round to deleting it
+        widget.deleteLater()
         row.deleteLater()
 
     def clear(self) -> None:
         for bubble in list(self.bubbles):
             self.remove(bubble)
+        for card in self.cards:
+            self._take(card)
+        self.cards.clear()
 
     def texts(self) -> list[tuple[str, str]]:
         return [(bubble.role, bubble.text) for bubble in self.bubbles]
@@ -105,10 +125,15 @@ class ChatView(QScrollArea):
         width = max(self.viewport().width(), 240)
         bubble.setMaximumWidth(max(width - 40, 200) if bubble.role == NOTE else int(width * BUBBLE_SHARE))
 
+    def _limit_card(self, card: QWidget) -> None:
+        card.setMaximumWidth(max(int(max(self.viewport().width(), 240) * BUBBLE_SHARE), 200))
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         for bubble in self.bubbles:
             self._limit_width(bubble)
+        for card in self.cards:
+            self._limit_card(card)
 
     # -- following new text ----------------------------------------------------------- #
 

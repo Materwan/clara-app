@@ -28,6 +28,10 @@ put it away. The app keeps running in the tray.
   it. *New chat in this project* starts one there. Right-click a conversation in ☰, **Move to a project…**, to put
   it in another project or in none. Files are read **by the server**, not on this computer (unlike the 📎
   attachments of one message).
+- **QCM**: Clara can quiz you or collect several answers at once: a form appears in the conversation with
+  radio buttons (one answer), check boxes (several) or a text box, and **Send answers** sends them as your next
+  message. When Clara gave the right answers the card then shows your score, what was right and wrong, and her
+  explanations. A conversation opened again shows its forms, answered ones with your choices.
 - **Reminders** (`/remind` in `clara-chat` or the console, or "remind me…" to Clara) are yours only: they
   pop up as a Windows notification even when the window is hidden, when they were set for every client of
   yours or for the app (`@app`; Clara picks this herself when you say "on my desktop"). The notification
@@ -116,6 +120,7 @@ src/clara_app/
   documents.py      reading attached files (PDF with pypdf, code and text), putting them in the message,
                     and taking them out of a message shown again
   chat_view.py      the conversation: bubbles rendered as Markdown
+  qcm.py            the card of a QCM Clara asks, and the message of its answers
   settings_dialog.py  server / token / identity, with a connection test
   api.py            the Clara server over HTTP (Qt-free, blocking)
   workers.py        threads: one reply, the reminder / notification / server-state stream, reading

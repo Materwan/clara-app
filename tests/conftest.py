@@ -54,6 +54,7 @@ class State:
         self.chat_bodies: list[dict] = []
         self.deleted: list[str] = []
         self.reply = ["Hello ", "**world**"]  # tokens of the next answer
+        self.extra_events: list[dict] = []  # events sent after the tokens of an answer (a `qcm`...)
         self.chat_error: str | None = None  # an `error` event instead of an answer
         self.hold = threading.Event()  # set: the answer stops after its first token and waits
         self.reminders: list[dict] = []  # sent to each connection of the reminder stream, then it ends
@@ -366,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(0.01)
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
+            for extra in self.state.extra_events:
+                self.event(extra)
             conversation = body.get("conversation") or ""
             if conversation not in self.state.conversations:
                 self.state.add_conversation(conversation)
