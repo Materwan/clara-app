@@ -136,6 +136,67 @@ class TestDialog:
         wait_until(lambda: "was not saved" in dialog.verdict.text())
         assert dialog.result() != QDialog.DialogCode.Accepted and dialog.save_button.isEnabled()
 
+    def test_the_dialog_offers_the_models_and_saves_the_choice_for_the_app(self, qt, server):
+        url, state = server
+        state.offered_models = [
+            {"ref": "cloud:big", "name": "big", "provider_label": "Ollama API key", "weight": 8.75},
+            {"ref": "local:small", "name": "small", "provider_label": "Local host", "weight": 0.125},
+        ]
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        assert not dialog.model_box.isEnabled()  # not before the server has said which ones there are
+        wait_until(lambda: dialog.model_box.isEnabled())
+        assert [dialog.model_box.itemData(i) for i in range(dialog.model_box.count())] == [None, "cloud:big", "local:small"]
+        assert "fake-model" in dialog.model_box.itemText(0) and "0.4 credits per token" in dialog.model_box.itemText(0)
+        assert "8.75 credits per token" in dialog.model_box.itemText(1)
+        assert "0.125 credits per token" in dialog.model_box.itemText(2)
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+        assert state.model_requests == []  # unchanged: nothing is sent
+
+        again = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: again.model_box.isEnabled())
+        again.model_box.setCurrentIndex(again.model_box.findData("cloud:big"))
+        again.accept()
+        wait_until(lambda: again.result() == QDialog.DialogCode.Accepted)
+        assert state.model_choice == "cloud:big"
+
+        third = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: third.model_box.isEnabled())
+        assert third.model_box.currentData() == "cloud:big"  # what the server has is shown
+        third.model_box.setCurrentIndex(0)
+        third.accept()
+        wait_until(lambda: third.result() == QDialog.DialogCode.Accepted)
+        assert state.model_choice is None
+
+    def test_without_models_on_offer_the_choice_stays_the_servers(self, qt, server):
+        url, state = server
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: dialog._models_loaded)
+        assert not dialog.model_box.isEnabled() and "no other model is offered" in dialog.model_box.itemText(0)
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+        assert state.model_requests == []
+
+    def test_an_older_server_without_models_does_not_stop_the_dialog(self, qt, server):
+        url, state = server
+        state.models_known = False
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: all(not call.isRunning() for call in dialog._calls))
+        assert not dialog.model_box.isEnabled() and not dialog._models_loaded
+        dialog.accept()
+        wait_until(lambda: dialog.result() == QDialog.DialogCode.Accepted)
+
+    def test_a_server_that_refuses_the_model_keeps_the_dialog_open_and_says_why(self, qt, server):
+        url, state = server
+        state.offered_models = [{"ref": "cloud:big", "name": "big", "provider_label": "Ollama API key", "weight": 8.75}]
+        dialog = dialog_for(url, password="", token=USER_TOKEN)
+        wait_until(lambda: dialog.model_box.isEnabled())
+        state.offered_models = []  # an administrator took it away meanwhile
+        dialog.model_box.setCurrentIndex(dialog.model_box.findData("cloud:big"))
+        dialog.accept()
+        wait_until(lambda: "model was not saved" in dialog.verdict.text())
+        assert dialog.result() != QDialog.DialogCode.Accepted and dialog.save_button.isEnabled()
+
     def test_the_connection_can_be_saved_without_reaching_the_delay(self, qt):
         with socket.socket() as sock:  # nobody listens: the delay cannot be read
             sock.bind(("127.0.0.1", 0))

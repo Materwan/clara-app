@@ -151,6 +151,20 @@ class TestApi:
         assert ClaraApi(config).set_notify_after(None)["notify_after_effective"] == 120
         assert state.settings_patches[0] == {"surface": "app", "user_id": "tester", "user_name": "Tess", "notify_after": 45}
 
+    def test_the_models_on_offer_are_read_and_one_is_chosen_for_the_app(self, config, server):
+        _, state = server
+        state.offered_models = [{"ref": "cloud:big", "name": "big", "provider_label": "Ollama API key", "weight": 8.75}]
+        info = ClaraApi(config).models()
+        assert [m["ref"] for m in info["models"]] == ["cloud:big"] and info["current"]["name"] == "fake-model"
+        assert ClaraApi(config).choose_model("cloud:big")["current"]["ref"] == "cloud:big"
+        assert state.model_requests == [{"surface": "app", "user_id": "tester", "model": "cloud:big"}]
+        assert ClaraApi(config).models()["choices"] == {"app": "cloud:big"}
+        assert ClaraApi(config).choose_model(None)["choices"] == {}  # the server's own again
+
+    def test_a_model_that_is_not_offered_is_refused_with_the_reason(self, config, server):
+        with pytest.raises(ApiError, match="not one of the models you may choose"):
+            ClaraApi(config).choose_model("cloud:secret")
+
     def test_closing_a_stream_ends_it_quietly(self, config, server):
         _, state = server
         state.hold.set()

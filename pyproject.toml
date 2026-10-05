@@ -29,7 +29,7 @@ clara-app = "clara_app.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-clara_app = ["katex/*", "katex/fonts/*"]  # KaTeX, which typesets formulas (the same files as the web site)
+clara_app = ["katex/*", "katex/fonts/*", "clara.ico"]  # KaTeX (formulas, the same files as the web site), and the icon
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

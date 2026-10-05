@@ -80,6 +80,11 @@ class State:
         self.logins: list[dict] = []  # bodies of POST /v1/auth/login
         self.notify_after: int | None = None  # the user's setting (None: not set, the server's 120 s applies)
         self.settings_patches: list[dict] = []  # bodies of PATCH /v1/settings
+        # the models an administrator offers (`ref`, `name`, `provider_label`, `weight`); none: the server's own only
+        self.offered_models: list[dict] = []
+        self.model_choice: str | None = None  # what the user chose for the app
+        self.model_requests: list[dict] = []  # bodies of PUT /v1/models/choice
+        self.models_known = True  # False: the server has no /v1/models (an older one)
         # projects: id -> {"id", "name", "description", "instructions", ...}; their files: id -> {path: text}
         self.projects: dict[int, dict] = {}
         self.project_files: dict[int, dict[str, str]] = {}
@@ -149,6 +154,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def models_payload(self) -> dict:
+        state = self.state
+        default = {"ref": "local:fake-model", "name": state.model, "provider_label": "Local host", "weight": 0.4}
+        chosen = next((m for m in state.offered_models if m["ref"] == state.model_choice), None)
+        return {
+            "surface": "app", "models": state.offered_models, "default": default,
+            "choices": {"app": chosen["ref"]} if chosen else {}, "current": chosen or default, "surfaces": ["app"],
+        }
 
     def settings_payload(self) -> dict:
         own = self.state.notify_after
@@ -254,6 +268,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"detail": "Nobody known as app:tester"})
         if self.path.split("?")[0] == "/v1/settings":
             return self.reply(200, self.settings_payload())
+        if self.path.split("?")[0] == "/v1/models":
+            if not self.state.models_known:
+                return self.reply(404, {"detail": "Not Found"})
+            return self.reply(200, self.models_payload())
         if self.path.startswith("/v1/projects"):
             return self.project_route("GET")
         if self.path.split("?")[0] == "/v1/conversations":
@@ -302,6 +320,19 @@ class Handler(BaseHTTPRequestHandler):
             conversation, _, _ = self.conversation_route()
             self.state.conversations.pop(conversation, None)
             self.reply(200, {"deleted_messages": len(self.state.messages.pop(conversation, []))})
+
+    def do_PUT(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        if not self.authorised():
+            return
+        if self.path == "/v1/models/choice":
+            self.state.model_requests.append(body)
+            if body["model"] is not None and not any(m["ref"] == body["model"] for m in self.state.offered_models):
+                return self.reply(422, {"detail": f"{body['model']} is not one of the models you may choose."})
+            self.state.model_choice = body["model"]
+            return self.reply(200, self.models_payload())
+        self.reply(404, {"detail": "no such route"})
 
     def do_PATCH(self):
         length = int(self.headers.get("Content-Length") or 0)

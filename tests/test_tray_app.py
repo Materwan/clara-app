@@ -406,3 +406,17 @@ class TestApplication:
         application.start(background=False)
         application.quit()
         assert application.listener is None and not application.window.isVisible()
+
+
+def test_the_icon_is_the_picture_of_clara_and_turns_grey_when_the_server_is_down(qt):
+    from PySide6.QtCore import QSize
+
+    from clara_app.icon import ICON_FILE, make_icon
+
+    assert ICON_FILE.is_file()
+    online, offline = make_icon(True), make_icon(False)
+    assert not online.isNull() and QSize(32, 32) in online.availableSizes()
+    up, down = online.pixmap(32).toImage(), offline.pixmap(32).toImage()
+    colourful = max(abs(up.pixelColor(x, y).red() - up.pixelColor(x, y).blue()) for x in range(32) for y in range(32))
+    grey = max(abs(down.pixelColor(x, y).red() - down.pixelColor(x, y).blue()) for x in range(32) for y in range(32))
+    assert colourful > 20 and grey == 0

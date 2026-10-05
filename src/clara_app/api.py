@@ -247,6 +247,18 @@ class ClaraApi:
         body = {**self._identity(), "user_name": self.config.user_name or None, "notify_after": seconds}
         return self._call("PATCH", "/v1/settings", json=body).json()
 
+    # -- the model --------------------------------------------------------------------------- #
+
+    def models(self) -> dict:
+        """The models this user may choose here (`models`: `ref`, `name`, `provider_label`, `weight`, the credits a
+        token costs), the server's own (`default`), what they chose (`choices`, by surface) and the model in use
+        (`current`). An administrator selects the models; there may be none."""
+        return self._call("GET", "/v1/models", params=self._identity()).json()
+
+    def choose_model(self, ref: str | None) -> dict:
+        """Choose the model Clara answers this user with in the app (None: the server's own)."""
+        return self._call("PUT", "/v1/models/choice", json={**self._identity(), "model": ref}).json()
+
     # -- projects --------------------------------------------------------------------------- #
 
     def projects(self) -> list[dict]:

@@ -52,8 +52,11 @@ put it away. The app keeps running in the tray.
   stopping", "○ Clara is not running"), in the icon's tooltip, and by a notification whenever it
   changes: *Clara is stopping: she finishes what is running and takes nothing new*, *Clara is not
   running*, *Clara is running again*. Asking a question while she is stopping says so.
-- Right-click the icon: Open, Settings…, **Start with Windows**, Quit. The icon turns grey when Clara
-  is not running.
+- Right-click the icon: Open, Settings…, **Start with Windows**, Quit. The icon (`clara_app/clara.ico`, the same
+  picture as the web site's) turns grey when Clara is not running.
+- **The model**: Settings lists the models an administrator lets you choose, with what a token of each costs in
+  credits (a bigger model uses your daily credits faster); your choice is for the app only, and Discord's model is the
+  administrators'. When none is offered, Clara answers with the server's own model.
 - Starting the app a second time just shows the window of the one already running.
 
 ## Install and run
@@ -90,7 +93,7 @@ as the account they were set from.
 | **☰** | show / hide your conversations |
 | **New chat** | start a new conversation; the one shown stays in the list |
 | right click in the list | rename, pin / unpin, move to a project, delete (erased on the server; what Clara knows about you stays) |
-| **Settings** | change server, token, name, and when you are notified that a task is done (like the server, never, or after a number of seconds; kept by the server, so every client of yours follows it) |
+| **Settings** | change server, token, name, the model Clara answers you with in the app (among those an administrator offers, each with its cost in credits per token; kept by the server, separately from your other clients), and when you are notified that a task is done (like the server, never, or after a number of seconds; kept by the server, so every client of yours follows it) |
 | left click on the icon | show / hide the window |
 | double click on the icon | open the window |
 
@@ -136,7 +139,7 @@ src/clara_app/
   config.py         %APPDATA%\clara-app\config.json
   autostart.py      the "Start with Windows" registry value
   single.py         one running copy per user (a named local socket)
-  icon.py           the icon, drawn in code
+  icon.py           the icon (`clara.ico`, grey when the server is down)
 tests/              Qt runs offscreen, against a small fake Clara server
 ```
 

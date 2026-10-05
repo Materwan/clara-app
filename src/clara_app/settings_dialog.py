@@ -23,6 +23,12 @@ from .config import Config, url_hint
 from .workers import CallWorker, LoginWorker, ProbeWorker
 
 MAX_NOTIFY_AFTER = 7 * 86400  # seconds: what the server accepts
+
+
+def cost(model: dict) -> str:
+    """What a token of a model costs, in words: "0.4 credits per token"."""
+    weight = f"{model['weight']:.3f}".rstrip("0").rstrip(".")
+    return f"{weight} {'credit' if model['weight'] == 1 else 'credits'} per token"
 DEFAULT_NOTIFY_AFTER = 120  # shown when the user picks a delay of their own
 
 
@@ -38,6 +44,8 @@ class SettingsDialog(QDialog):
         self._then_accept = False
         self._notify_loaded = False  # the user's setting was read from the server (and may be saved)
         self._notify_original: int | None = None  # what the server had: None (its default), 0 (never) or seconds
+        self._models_loaded = False  # the models were read from the server (and the choice may be saved)
+        self._model_original: str | None = None  # the model the server had for the app (None: its own)
 
         self.url = QLineEdit(config.url)
         self.url.setPlaceholderText("http://127.0.0.1:8765, or https://<machine>.<tailnet>.ts.net")
@@ -67,6 +75,11 @@ class SettingsDialog(QDialog):
         notify_row.addWidget(self.notify_seconds)
         self._set_notify_enabled(False)  # until the server has said what it is
 
+        # The model Clara answers with in the app, among those an administrator offers (kept by the server)
+        self.model_box = QComboBox()
+        self.model_box.addItem("Like the server", None)
+        self.model_box.setEnabled(False)  # until the server has said which ones there are
+
         form = QFormLayout()
         form.addRow("Server", self.url)
         form.addRow("User name", self.user_id)
@@ -74,6 +87,7 @@ class SettingsDialog(QDialog):
         form.addRow("Sign-in token", self.token)
         form.addRow("Your name", self.user_name)
         form.addRow("Notify when a task is done", notify_row)
+        form.addRow("Model", self.model_box)
 
         self.url_note = QLabel("")
         self.url_note.setWordWrap(True)
@@ -106,6 +120,7 @@ class SettingsDialog(QDialog):
             field.textChanged.connect(self._update_save)
         self._update_save()
         self._load_notify()
+        self._load_models()
 
     def config(self) -> Config:
         """The settings as typed."""
@@ -174,7 +189,7 @@ class SettingsDialog(QDialog):
         """Save the setting if it was read and changed, then close; a refusal is shown and keeps the dialog open."""
         value = self._notify_value()
         if not self._notify_loaded or value == self._notify_original:
-            return super().accept()
+            return self._save_model()
         self.test.setEnabled(False)
         self.save_button.setEnabled(False)
         self.verdict.setStyleSheet("")
@@ -187,6 +202,51 @@ class SettingsDialog(QDialog):
         if error:
             self.verdict.setStyleSheet("color: #b3261e;")
             self.verdict.setText(f"The notification delay was not saved: {error}")
+            return
+        self._save_model()
+
+    # -- the model Clara answers with ---------------------------------------------------------------- #
+
+    def _load_models(self) -> None:
+        """Read the models the user may choose (when there is a token to ask with)."""
+        config = self.config()
+        if not (config.url and config.token and config.user_id):
+            return
+        self._run_call(ClaraApi(config).models, self._models_read)
+
+    def _models_read(self, info: object, error: str) -> None:
+        if error or not isinstance(info, dict):
+            return  # the choice stays out of reach: the connection can still be saved
+        offered = info.get("models") or []
+        default = info.get("default") or {}
+        self.model_box.clear()
+        label = f"Like the server: {default['name']} ({cost(default)})" if default else "Like the server"
+        self.model_box.addItem(label if offered else label + ", no other model is offered", None)
+        for model in offered:
+            self.model_box.addItem(f"{model['name']} ({model['provider_label']}), {cost(model)}", model["ref"])
+        own = (info.get("choices") or {}).get("app")
+        self._model_original = own if any(m["ref"] == own for m in offered) else None
+        self.model_box.setCurrentIndex(max(0, self.model_box.findData(self._model_original)))
+        self._models_loaded = True
+        self.model_box.setEnabled(bool(offered))
+
+    def _save_model(self) -> None:
+        """Save the model if it was read and changed, then close; a refusal is shown and keeps the dialog open."""
+        value = self.model_box.currentData()
+        if not self._models_loaded or value == self._model_original:
+            return super().accept()
+        self.test.setEnabled(False)
+        self.save_button.setEnabled(False)
+        self.verdict.setStyleSheet("")
+        self.verdict.setText("Saving…")
+        self._run_call(lambda: ClaraApi(self.config()).choose_model(value), self._model_saved)
+
+    def _model_saved(self, _: object, error: str) -> None:
+        self.test.setEnabled(True)
+        self._update_save()
+        if error:
+            self.verdict.setStyleSheet("color: #b3261e;")
+            self.verdict.setText(f"The model was not saved: {error}")
             return
         super().accept()
 
@@ -207,6 +267,8 @@ class SettingsDialog(QDialog):
         self.test.setEnabled(True)
         if not self._notify_loaded:  # now there is a token to ask the server with
             self._load_notify()
+        if not self._models_loaded:
+            self._load_models()
         if self._then_accept:
             self._then_accept = False
             self._save_notify()
