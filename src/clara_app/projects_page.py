@@ -192,6 +192,9 @@ class ProjectsPage(Page):
         form.addRow("Description:", self.description)
         form.addRow("Instructions:", self.instructions)
         self.chat_button.setProperty("kind", "primary")
+        self.connections_button = QPushButton("Connections…")
+        self.connections_button.setToolTip("What Clara can reach in every conversation of this project: GitHub, Google Drive, folders")
+        self.connections_button.clicked.connect(self.show_connections)
         edit_row = QHBoxLayout()
         edit_row.addStretch(1)
         edit_row.addWidget(self.save_button)
@@ -267,6 +270,7 @@ class ProjectsPage(Page):
         head.setSpacing(10)
         head.addWidget(self.back_button)
         head.addWidget(self.project_title, 1)
+        head.addWidget(self.connections_button)
         head.addWidget(self.chat_button)
         head.addWidget(self.delete_button)
         about = Panel("About", "Its name, what it is for, and how Clara should work in it.")
@@ -335,6 +339,14 @@ class ProjectsPage(Page):
 
     def activated(self) -> None:
         self.reload()
+
+    def show_connections(self) -> None:
+        """Attach a repository, a Drive folder or a folder to every conversation of the project."""
+        if self.project is None:
+            return
+        from .integrations_page import ConnectionsDialog
+
+        ConnectionsDialog({"project": self.project["id"]}, self._get_config, self._api_factory, self).exec()
 
     def close_project(self) -> None:
         self.stack.setCurrentWidget(self.grid_page)

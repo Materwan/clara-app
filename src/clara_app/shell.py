@@ -31,7 +31,7 @@ RAIL_WIDTH = 276
 NARROW = 780  # below this width the rail is a drawer
 
 WORK = (("chat", "Chat", "chat"), ("projects", "Projects", "folder"), ("tasks", "Tasks", "tasks"), ("files", "Files", "file"))
-SETTINGS = (("memory", "Memory", "memory"), ("account", "Account", "user"), ("discord", "Discord", "bot"), ("admin", "Admin", "admin"))
+SETTINGS = (("memory", "Memory", "memory"), ("account", "Account", "user"), ("integrations", "Integrations", "plug"), ("discord", "Discord", "bot"), ("admin", "Admin", "admin"))
 ADMIN_ONLY = ("discord", "admin")
 
 
@@ -51,6 +51,7 @@ class Scrim(QWidget):
 class Shell(QWidget):
     new_chat_requested = Signal()
     page_changed = Signal(str)
+    approvals_requested = Signal()  # the "waiting for you" button of the rail
 
     def __init__(self, history: QWidget, factories: dict[str, Callable[[], Page]]):
         super().__init__()
@@ -131,10 +132,17 @@ class Shell(QWidget):
         for widget in (self._me_name, self._me_status):
             widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._group.addButton(self.me)
+        self.approvals_button = QPushButton()
+        self.approvals_button.setObjectName("approvals-badge")
+        self.approvals_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        bind_icon(self.approvals_button, "shield", "rail_signal", 18)
+        self.approvals_button.clicked.connect(self.approvals_requested)
+        self.approvals_button.hide()
         foot = QFrame()
         foot.setObjectName("rail-foot")
         foot_row = QVBoxLayout(foot)
         foot_row.setContentsMargins(8, 8, 8, 10)
+        foot_row.addWidget(self.approvals_button)
         foot_row.addWidget(self.me)
 
         rail_layout = QVBoxLayout(self.rail)
@@ -235,6 +243,12 @@ class Shell(QWidget):
         """Who is signed in, shown at the bottom of the rail."""
         self._avatar.setText((name or "?").strip()[:1].upper() or "?")
         self._me_name.setText(name or APP_NAME)
+
+    def set_approvals(self, count: int) -> None:
+        """How many requests for permission wait for an answer (the button shows only when some do)."""
+        self.approvals_button.setVisible(count > 0)
+        self.approvals_button.setText(f"  Waiting for you  ·  {count}")
+        self.approvals_button.setToolTip(f"{count} request{'s' if count != 1 else ''} from Clara waiting for your permission")
 
     def set_status(self, text: str, state: str | None) -> None:
         """What the server is doing, under the name."""

@@ -94,7 +94,9 @@ as the account they were set from.
 | **Stop** (the send button while Clara writes) | stop the answer; what has arrived is kept |
 | **New chat** | start a new conversation; the one shown stays in the list |
 | right click in the list, or "…" | rename, pin / unpin, move to a project, delete (erased on the server; what Clara knows about you stays) |
-| click you, bottom of the rail | Memory, Account, Discord, Admin |
+| click you, bottom of the rail | Memory, Account, Integrations, Discord, Admin |
+| **Waiting for you** (bottom of the rail) | the requests Clara made that need your permission (also on a notification) |
+| **Connections** (the plug in a chat's header, or on a project's page) | what Clara can reach there: GitHub, Google Drive, folders |
 | left click on the icon | show / hide the window |
 | double click on the icon | open the window |
 
@@ -116,8 +118,12 @@ Closing the window does not stop the app: use **Quit** in the tray menu.
   (`CLARA_PURGE_SUMMARISED` on the server), the summary is shown in their place. Attached documents show
   as their names: their text is not shown again. What Clara used to answer (the line under a reply) is shown
   for the answers written in this session only: the server does not keep the tool calls with the messages.
-- It runs no tools on your computer (files, shell...): Clara reads only the documents you attach, and
-  cannot open a file by herself. The server's own tools (`remember`, `remind`, `notify`...) work.
+- It runs no tools on your computer (shell...): Clara reads the documents you attach. She can work in a folder of
+  this computer **only if you added it** (Integrations, *Add*, *Folder on this computer*) and only while the app is
+  running: the app keeps the list of those folders (`computer-folders.json`, next to its settings), does what the
+  server asks inside them, refuses any path that leaves them, and the server never learns where they are. Replacing or
+  deleting there asks your permission first, like everywhere else (*Integrations*). The server's own tools
+  (`remember`, `remind`, `notify`...) work.
 - A scanned PDF (images of pages) has no text to read: there is no OCR.
 - Windows only for the start-up entry; the rest is Qt and should run elsewhere, but the tray is
   only tested on Windows 11.

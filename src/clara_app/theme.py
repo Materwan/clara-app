@@ -145,7 +145,14 @@ QLabel#badge { background: $panel_2; color: $text_2; border-radius: 4px; padding
 QLabel#badge[kind="admin"] { background: $primary; color: $primary_ink; }
 QLabel#badge[kind="ok"] { background: $ok_soft; color: $ok; }
 QLabel#badge[kind="off"] { background: $danger_soft; color: $danger; }
+QLabel#badge[kind="ask"] { background: $accent_soft; color: $accent_text; }
+QFrame#approval { background: transparent; border: 1px solid $line_strong; border-top: 2px solid $accent; border-radius: 4px 4px 8px 8px; }
+QFrame#approval[settled="true"] { border-top: 2px solid $line_strong; }
+QLabel#approval-summary { font-weight: 650; }
+QLabel#approval-reason { color: $text_2; font-style: italic; }
 
+QPushButton#approvals-badge { background: transparent; color: $rail_text; border: 1px solid $rail_signal; border-radius: 8px; padding: 7px 10px; text-align: left; font-weight: 650; }
+QPushButton#approvals-badge:hover { background: $rail_hover; }
 QFrame#page-head { background: $bg; border-bottom: 1px solid $line; }
 QFrame#settings-bar { background: $bg; border-bottom: 1px solid $line; }
 QPushButton#settings-tab { border: none; border-bottom: 2px solid transparent; border-radius: 0; color: $muted; padding: 10px 12px; background: transparent; }

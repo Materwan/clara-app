@@ -25,6 +25,7 @@ class ChatWorker(QThread):
     token = Signal(str)
     qcm = Signal(dict)  # a form Clara asks the user to answer
     tool = Signal(dict)  # a tool of the server ran: `name`, `arguments`, `result`
+    approval = Signal(dict)  # Clara asks for a permission and goes on: the request, to answer in the conversation
     answered = Signal()
     failed = Signal(str)
 
@@ -55,6 +56,8 @@ class ChatWorker(QThread):
                     self.qcm.emit(event["form"])
                 elif kind == "tool":
                     self.tool.emit(event)
+                elif kind == "approval":
+                    self.approval.emit(event["approval"])
                 elif kind == "error":
                     self.failed.emit(str(event.get("message", "the server reported an error")))
                     return
@@ -74,6 +77,9 @@ class ReminderWorker(QThread):
 
     reminder = Signal(dict)
     notification = Signal(dict)
+    approval = Signal(dict)  # a request for permission nobody answered in time: answer it here
+    approval_resolved = Signal(dict)  # it was answered somewhere
+    job = Signal(dict)  # Clara asks something of a folder of this computer
     connection = Signal(bool)
     server = Signal(str)
 
@@ -104,6 +110,12 @@ class ReminderWorker(QThread):
                         self.reminder.emit(event)
                     elif kind == "notification":
                         self.notification.emit(event)
+                    elif kind == "approval":
+                        self.approval.emit(event)
+                    elif kind == "approval_resolved":
+                        self.approval_resolved.emit(event)
+                    elif kind == "job":
+                        self.job.emit(event)
                     elif kind == "server":
                         self.server.emit(str(event.get("state", "")))
             except ApiError:

@@ -3,25 +3,31 @@ together."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication, QDialog
 
-from . import APP_NAME, autostart, config as config_module
+from . import APP_NAME, autostart
+from . import config as config_module
 from .api import ClaraApi
 from .chat_window import ChatWindow
 from .config import Config
+from .local_folders import FolderRegistry, LocalFolders, run_jobs
 from .settings_dialog import SettingsDialog
 from .status import CHANGED, STATUS, from_server
 from .theme import install as install_theme
 from .tray import Tray
+from .widgets import Calls
 from .workers import ReminderWorker
 
 LATE_SECONDS = 120  # a reminder shown this long after it fired is announced as missed
+APPROVAL_NOTICE_SECONDS = 12.0  # a click on a notification this soon after a request for permission opens the requests
+APPROVALS_REFRESH_MS = 60_000  # the count of requests waiting is read again this often, whatever was heard
 
 
 def describe_reminder(event: dict, now: datetime | None = None) -> tuple[str, str, str]:
@@ -48,7 +54,13 @@ def describe_notification(event: dict, now: datetime | None = None) -> tuple[str
     return title, str(event["text"]), detail
 
 
-class ClaraApplication(QObject):
+def describe_approval(event: dict) -> tuple[str, str]:
+    """`(title, text)` of the notification for a request for permission nobody answered in time."""
+    where = event.get("resource") or ""
+    return "Clara needs your permission", "\n".join(part for part in (str(event.get("summary") or event.get("text") or ""), f"On {where}" if where else "") if part)
+
+
+class ClaraApplication(QObject, Calls):
     def __init__(
         self,
         qt: QApplication,
@@ -60,6 +72,13 @@ class ClaraApplication(QObject):
         self._config_path = config_path
         self._api_factory = api_factory
         self.config = config_module.load(config_path)
+        self._init_calls(lambda: self.config, api_factory)
+        self._approval_notice_at = 0.0  # when the last request for permission was announced
+        self._jobs_running = False
+        self._jobs_again = False
+        self.approvals_timer = QTimer(self)
+        self.approvals_timer.setInterval(APPROVALS_REFRESH_MS)
+        self.approvals_timer.timeout.connect(self.refresh_approvals)
         self.listener: ReminderWorker | None = None
         self.server_state: str | None = None  # "running", "stopping", "down"; None until the server answers
 
@@ -71,6 +90,8 @@ class ClaraApplication(QObject):
         self.tray = Tray()
         self.tray.toggle_requested.connect(self.window.toggle)
         self.tray.open_requested.connect(self.window.bring_to_front)
+        self.tray.messageClicked.connect(self._notice_clicked)  # (the click also opens the window: open_requested)
+        self.window.approvals_changed.connect(self.refresh_approvals)
         self.tray.settings_requested.connect(self.open_account)
         self.tray.tasks_requested.connect(self.open_tasks)
         self.tray.autostart_toggled.connect(self._set_autostart)
@@ -92,6 +113,8 @@ class ClaraApplication(QObject):
 
     def quit(self) -> None:
         self.stop_listener()
+        self.approvals_timer.stop()
+        self.stop_calls()
         self.window.quit_for_good()
         self.tray.hide()
         self.window.close()
@@ -153,6 +176,9 @@ class ClaraApplication(QObject):
         self.listener = ReminderWorker(lambda: self._api_factory(config), parent=self)
         self.listener.reminder.connect(self.on_reminder)
         self.listener.notification.connect(self.on_notification)
+        self.listener.approval.connect(self.on_approval)
+        self.listener.approval_resolved.connect(self.on_approval_resolved)
+        self.listener.job.connect(lambda _event: self.do_jobs())
         self.listener.connection.connect(self._connection)
         self.listener.server.connect(self._server_said)
         self.listener.start()
@@ -167,6 +193,10 @@ class ClaraApplication(QObject):
     def _connection(self, online: bool) -> None:
         if not online:  # the server cannot be reached (or the connection broke without a word)
             self._set_server_state("down")
+            return
+        self.refresh_approvals()  # what was asked while the app was off is waiting
+        self.do_jobs()
+        self.approvals_timer.start()
 
     def _server_said(self, state: str) -> None:
         self._set_server_state(from_server(state))
@@ -186,6 +216,50 @@ class ClaraApplication(QObject):
         status = STATUS[self.server_state or "running"]  # a reminder reached us, so the server is there
         self.tray.notify(title, "\n".join(part for part in (text, detail, status) if part))
         self.window.add_reminder(text, detail)
+
+    # -- requests for permission ------------------------------------------------------------------ #
+
+    def on_approval(self, event: dict) -> None:
+        """A request nobody answered in time reached this device: announce it, and show it in the list of the rail."""
+        title, text = describe_approval(event)
+        self._approval_notice_at = time.monotonic()
+        self.tray.notify(title, text)
+        self.refresh_approvals()
+
+    def on_approval_resolved(self, _event: dict) -> None:
+        self.refresh_approvals()
+
+    def refresh_approvals(self) -> None:
+        if not self.config.ready:
+            self.window.shell.set_approvals(0)
+            return
+        self._call(lambda api: api.approvals(), lambda result, error: None if error else self.window.shell.set_approvals(len(list(result))))  # type: ignore[arg-type]
+
+    def _notice_clicked(self) -> None:
+        """A click on a notification that announced a request for permission: the requests."""
+        if time.monotonic() - self._approval_notice_at < APPROVAL_NOTICE_SECONDS:
+            self.window.show_approvals()
+
+    # -- folders of this computer ------------------------------------------------------------------ #
+
+    def do_jobs(self) -> None:
+        """Clara asked something of a folder of this computer: do it, here, and say how it went."""
+        if not self.config.ready:
+            return
+        registry = FolderRegistry.load()
+        if not registry.folders:
+            return
+        if self._jobs_running:
+            self._jobs_again = True
+            return
+        self._jobs_running = True
+        self._call(lambda api: run_jobs(api, LocalFolders(registry)), self._jobs_done)
+
+    def _jobs_done(self, _result: object, _error: str) -> None:
+        self._jobs_running = False
+        if self._jobs_again:
+            self._jobs_again = False
+            self.do_jobs()
 
     def on_notification(self, event: dict) -> None:
         """Pop it up, unless it is about the conversation the user is looking at right now."""

@@ -484,3 +484,92 @@ class ClaraApi:
 
     def discord_members(self, query: str) -> dict:
         return self._call("GET", "/v1/admin/discord/members", params={"q": query}).json()
+
+    # -- integrations: connected accounts, repositories, folders, requests for permission ------------------ #
+
+    def integrations(self) -> dict:
+        """`types` (what is on), `accounts`, `resources` (with `effective` permissions), `roots`, `pending`, `settings`."""
+        return self._call("GET", "/v1/integrations", params=self._identity()).json()
+
+    def set_approval_notify_after(self, seconds: int | None) -> dict:
+        """After how long an unanswered request is pushed to the other devices (0: never; None: the server's default)."""
+        return self._call("PUT", "/v1/integrations/settings", json={**self._identity(), "approval_notify_after": seconds}).json()
+
+    def connect_github(self, token: str) -> dict:
+        return self._call("POST", "/v1/integrations/github", json={**self._identity(), "token": token}).json()
+
+    def google_start(self) -> dict:
+        """`url`: where to send the person to connect their Google Drive (the browser comes back to the server)."""
+        return self._call("POST", "/v1/integrations/google/start", json=self._identity()).json()
+
+    def disconnect_account(self, account: int) -> dict:
+        return self._call("DELETE", f"/v1/integrations/accounts/{int(account)}", params=self._identity()).json()
+
+    def set_account_levels(self, account: int, levels: dict) -> dict:
+        return self._call("PATCH", f"/v1/integrations/accounts/{int(account)}", json={**self._identity(), "levels": levels}).json()
+
+    def browse_github(self, account: int | None, query: str = "") -> dict:
+        params = {**self._identity(), "q": query, **({"account": int(account)} if account else {})}
+        return self._call("GET", "/v1/integrations/browse/github", read=30.0, params=params).json()
+
+    def browse_drive(self, account: int | None, folder: str = "root", query: str = "") -> dict:
+        params = {**self._identity(), "folder": folder, "q": query, **({"account": int(account)} if account else {})}
+        return self._call("GET", "/v1/integrations/browse/drive", read=30.0, params=params).json()
+
+    def browse_server(self, path: str = "") -> dict:
+        return self._call("GET", "/v1/integrations/browse/server", params={**self._identity(), "path": path}).json()
+
+    def add_resource(self, kind: str, **fields: object) -> dict:
+        """Add a repository (`repo`, `ref`, `account`), a Drive folder or file (`file_id`, `account`), a folder of the
+        server (`path`) or of this computer (`device`, `alias`, `label`)."""
+        return self._call("POST", "/v1/integrations/resources", read=30.0, json={**self._identity(), "kind": kind, **fields}).json()
+
+    def update_resource(self, resource: int, **fields: object) -> dict:
+        return self._call("PATCH", f"/v1/integrations/resources/{int(resource)}", json={**self._identity(), **fields}).json()
+
+    def delete_resource(self, resource: int) -> dict:
+        return self._call("DELETE", f"/v1/integrations/resources/{int(resource)}", params=self._identity()).json()
+
+    def attachments(self, project: int | None = None, conversation: str | None = None) -> dict:
+        """What is attached to a project, or to a conversation: `attachments`, and the `inherited` ones."""
+        params = {**self._identity(), **({"project": int(project)} if project else {"conversation": conversation})}
+        return self._call("GET", "/v1/integrations/attachments", params=params).json()
+
+    def attach(self, resource: int, project: int | None = None, conversation: str | None = None, levels: dict | None = None) -> dict:
+        body = {**self._identity(), "resource": int(resource), **({"project": int(project)} if project else {"conversation": conversation})}
+        if levels is not None:
+            body["levels"] = levels
+        return self._call("PUT", "/v1/integrations/attachments", json=body).json()
+
+    def detach(self, attachment: int) -> dict:
+        return self._call("DELETE", f"/v1/integrations/attachments/{int(attachment)}", params=self._identity()).json()
+
+    def approvals(self, conversation: str | None = None) -> list[dict]:
+        """The requests for permission that wait for an answer, the oldest first."""
+        params = {**self._identity(), "status": "pending", **({"conversation": conversation} if conversation else {})}
+        return list(reversed(self._call("GET", "/v1/approvals", params=params).json()["approvals"]))
+
+    def decide_approval(self, approval: int, approve: bool, remember: str = "") -> dict:
+        """Approve (the action runs now) or deny a request."""
+        body = {**self._identity(), "approve": approve, "remember": remember}
+        return self._call("POST", f"/v1/approvals/{int(approval)}/decide", read=150.0, json=body).json()
+
+    def computer_jobs(self, device: str) -> list[dict]:
+        """What Clara asked of this computer's folders (each given out once): `id`, `op`, `alias`, `args`."""
+        params = {**self._identity(), "device": device}
+        return self._call("GET", "/v1/integrations/jobs", params=params).json()["jobs"]
+
+    def finish_job(self, job: int, ok: bool, text: str) -> None:
+        self._call("POST", f"/v1/integrations/jobs/{int(job)}/result", read=60.0, json={**self._identity(), "ok": ok, "text": text})
+
+    # -- administration of the integrations --------------------------------------------------------------- #
+
+    def admin_integrations(self) -> dict:
+        return self._call("GET", "/v1/admin/integrations").json()
+
+    def admin_set_integrations(self, **change: object) -> dict:
+        return self._call("PUT", "/v1/admin/integrations", json=change).json()
+
+    def admin_integrations_log(self, before: int | None = None) -> list[dict]:
+        params = {"limit": 50, **({"before": before} if before else {})}
+        return self._call("GET", "/v1/admin/integrations/log", params=params).json()["entries"]

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from . import APP_NAME
 from .api import ClaraApi, new_conversation
+from .approvals import ApprovalCard, ApprovalsDialog
 from .chat_view import CLARA, ERROR, NOTE, USER, ChatView, MessageBubble, tool_note
 from .config import Config
 from .documents import FILTER, MAX_TOTAL_CHARS, Document, compose, split_message, total_chars
@@ -108,6 +109,10 @@ class ChatPage(Page):
     def __init__(self, window: "ChatWindow"):
         super().__init__()
         self.window_ = window
+        self.connections_button = QToolButton()
+        self.connections_button.setToolTip("Connections: what Clara can reach in this conversation (GitHub, Google Drive, folders)")
+        bind_icon(self.connections_button, "plug", "muted", 20)
+        self.connections_button.clicked.connect(window.show_connections)
         self.more_button = QToolButton()
         self.more_button.setToolTip("Conversation actions")
         bind_icon(self.more_button, "more", "muted", 20)
@@ -116,7 +121,7 @@ class ChatPage(Page):
         self.more_button.hide()
 
     def actions(self) -> list[QWidget]:
-        return [self.more_button]
+        return [self.connections_button, self.more_button]
 
     def activated(self) -> None:
         self.window_.input.setFocus()
@@ -126,6 +131,7 @@ class ChatWindow(QMainWindow):
     settings_requested = Signal()  # the connection must be set up (or changed)
     theme_chosen = Signal(str)  # "auto", "light" or "dark"
     signed_out = Signal()  # the user asked to forget the sign-in on this computer
+    approvals_changed = Signal()  # a request for permission was answered here: the count in the rail is read again
 
     def __init__(self, get_config: Callable[[], Config], api_factory: Callable[[Config], ClaraApi] = ClaraApi):
         super().__init__()
@@ -232,6 +238,7 @@ class ChatWindow(QMainWindow):
         self.shell = Shell(self.history, self._factories())
         self.shell.new_chat_requested.connect(self._new_chat_clicked)
         self.shell.page_changed.connect(self._page_changed)
+        self.shell.approvals_requested.connect(self.show_approvals)
         self.setCentralWidget(self.shell)
         self.shell.show_page("chat")
         self.setAcceptDrops(True)
@@ -256,6 +263,7 @@ class ChatWindow(QMainWindow):
         from .admin_page import AdminPage
         from .discord_page import DiscordPage
         from .files_page import FilesPage
+        from .integrations_page import IntegrationsPage
         from .memory_page import MemoryPage
         from .projects_page import ProjectsPage
         from .tasks_page import TasksPage
@@ -268,6 +276,7 @@ class ChatWindow(QMainWindow):
             "files": lambda: FilesPage(*args),
             "memory": lambda: MemoryPage(*args),
             "account": lambda: AccountPage(*args),
+            "integrations": lambda: IntegrationsPage(*args),
             "discord": lambda: DiscordPage(*args),
             "admin": lambda: AdminPage(*args),
         }
@@ -447,6 +456,7 @@ class ChatWindow(QMainWindow):
         )
         self._worker.token.connect(self._on_token)
         self._worker.qcm.connect(self._on_qcm)
+        self._worker.approval.connect(self._on_approval)
         self._worker.tool.connect(self._on_tool)
         self._worker.answered.connect(self._on_answered)
         self._worker.failed.connect(self._on_failed)
@@ -475,6 +485,68 @@ class ChatWindow(QMainWindow):
     def _on_qcm(self, form: dict) -> None:
         self._flush()
         self._add_qcm(form)
+
+    def _on_approval(self, approval: dict) -> None:
+        """Clara asked for a permission and went on: the request, with its buttons, in the conversation."""
+        self._flush()
+        self._add_approval(approval)
+
+    def _add_approval(self, approval: dict) -> None:
+        if any(getattr(card, "approval", {}).get("id") == approval.get("id") for card in self.view.cards):
+            return
+        card = ApprovalCard(approval, self._get_config, self._api_factory)
+        card.decided.connect(self._approval_answered)
+        self.view.add_card(card)
+
+    def _approval_answered(self, _done: dict) -> None:
+        """Answered: Clara goes on by herself on the server (a follow-up turn), so read the conversation again for a while."""
+        self.approvals_changed.emit()
+        self._watch_follow_up()
+
+    def _watch_follow_up(self) -> None:
+        timer = getattr(self, "_follow_timer", None)
+        if timer is None:
+            timer = self._follow_timer = QTimer(self)
+            timer.setInterval(3000)
+            timer.timeout.connect(self._follow_tick)
+        self._follow_ticks = 0
+        timer.start()
+
+    def _follow_tick(self) -> None:
+        self._follow_ticks += 1
+        if self._follow_ticks > 20:
+            self._follow_timer.stop()
+            return
+        self.sync()
+
+    def _load_approvals(self, conversation: str) -> None:
+        """The requests of the conversation shown that still wait (they are not in its messages)."""
+        def found(result: object, error: str) -> None:
+            if error or conversation != self.conversation:
+                return
+            for approval in list(result):  # type: ignore[arg-type]
+                self._add_approval(approval)
+
+        self._call(lambda api: api.approvals(conversation), found)
+
+    def show_approvals(self) -> None:
+        """Every request waiting for an answer, in a list."""
+        dialog = ApprovalsDialog(self._get_config, self._api_factory, self)
+        dialog.changed.connect(self._approval_answered)
+        dialog.exec()
+        self.approvals_changed.emit()
+
+    def show_connections(self) -> None:
+        """What is connected to the conversation shown: attach a repository, a Drive folder, a folder."""
+        if not self._get_config().ready:
+            self.settings_requested.emit()
+            return
+        if self.conversation is None:  # a new chat: its first message creates it, under this name
+            self.conversation = new_conversation(self._get_config().user_id)
+        from .integrations_page import ConnectionsDialog
+
+        heading = "This conversation is in a project: what is connected to the project is available here too." if self.project else ""
+        ConnectionsDialog({"conversation": self.conversation}, self._get_config, self._api_factory, self, heading).exec()
 
     def _add_qcm(self, form: dict, answers: list | None = None) -> None:
         """A form of Clara's in the conversation: to fill in, or, with the answers the user gave, answered."""
@@ -683,6 +755,7 @@ class ChatWindow(QMainWindow):
                     self._add_qcm(form, form.get("answers"))
         if not shown.get("messages") and not shown.get("summary"):
             self._show_welcome()
+        self._load_approvals(conversation)
         self.history.set_current(self.conversation)
         self._show_title()
         self.input.setFocus()
