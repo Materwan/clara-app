@@ -270,13 +270,19 @@ class ClaraApi:
     def task(self, task_id: int) -> dict:
         return self._call("GET", f"/v1/tasks/{int(task_id)}", params=self._identity()).json()
 
-    def add_task(self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None) -> dict:
-        """A task for this user. `due` and `reminders` are ISO 8601 times with their offset; without any reminder
-        Clara picks them (that can take a moment)."""
+    def add_task(
+        self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None,
+        parent_id: int | None = None,
+    ) -> dict:
+        """A task for this user (a sub task of `parent_id`, if given). `due` and `reminders` are ISO 8601 times with
+        their offset; without any reminder Clara picks them (that can take a moment). A sub task's deadline and
+        reminders cannot be after the deadline of the task it is part of."""
         body = {
             **self._identity(), "user_name": self.config.user_name or None, "title": title, "description": description,
             "due": due, "reminders": reminders or [],
         }
+        if parent_id:
+            body["parent_id"] = parent_id
         return self._call("POST", "/v1/tasks", read=TASK_READ_TIMEOUT, json=body).json()
 
     def change_task(self, task_id: int, **fields: object) -> dict:

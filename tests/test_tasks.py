@@ -11,7 +11,9 @@ from PySide6.QtWidgets import QMessageBox
 
 from clara_app.api import ApiError, ClaraApi
 from clara_app.chat_window import ChatWindow
-from clara_app.tasks_page import TasksPage, local, summary, to_iso, to_qt
+from clara_app.tasks_page import ID, TasksPage, local, summary, to_iso, to_qt
+
+ID_DEPTH = ID + 2  # where the list keeps how deep a task is
 
 TOMORROW = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
 
@@ -250,3 +252,72 @@ def test_without_a_server_the_window_asks_for_the_settings_first(qt, config):
     assert asked == [True] and window.shell.current == "chat"
     window.quit_for_good()
     window.close()
+
+
+# --- sub tasks ---------------------------------------------------------------------------------------------
+
+
+def test_a_sub_task_is_sent_with_the_task_it_is_part_of(config, server):
+    _, state = server
+    api = ClaraApi(config)
+    parent = api.add_task("Move house", due=(TOMORROW + timedelta(days=9)).isoformat())
+    sub = api.add_task("Pack", "Books", None, [TOMORROW.isoformat()], parent["id"])
+    assert state.task_requests[-1][2]["parent_id"] == parent["id"] and sub["parent_id"] == parent["id"]
+    api.add_task("Plain")
+    assert "parent_id" not in state.task_requests[-1][2]
+
+
+def test_the_list_draws_the_sub_tasks_under_their_task(qt, config, server):
+    _, state = server
+    parent = state.add_task("Move house", due=(TOMORROW + timedelta(days=9)).isoformat())
+    first = state.add_task("Pack", parent_id=parent["id"])
+    state.add_task("Sort the shelves", parent_id=first["id"])
+    state.add_task("Book the movers", status="done", parent_id=parent["id"])
+    state.add_task("Dentist")
+    dialog = make_dialog(qt, config)
+    wait_until(lambda: dialog.list.count() == 5)
+    assert titles(dialog) == ["Move house", "Pack", "Sort the shelves", "Book the movers", "Dentist"]
+    assert [dialog.list.item(row).data(ID_DEPTH) for row in range(5)] == [0, 1, 2, 1, 0]
+    assert "1/2 sub tasks" in dialog.list.item(0).text()
+    dialog.filter.setCurrentIndex(1)  # Done: the done sub task of a task still to do is listed on its own
+    assert titles(dialog) == ["Book the movers"]
+    dialog.shutdown()
+
+
+def test_a_sub_task_is_added_from_its_task_within_the_deadline(qt, config, server):
+    _, state = server
+    due = TOMORROW + timedelta(days=9)
+    parent = state.add_task("Move house", due=due.isoformat())
+    dialog = make_dialog(qt, config)
+    wait_until(lambda: dialog.list.count() == 1)
+    dialog.list.setCurrentRow(0)
+    assert dialog.sub_button.isEnabled()
+    dialog.start_sub()
+    assert dialog.task is None and dialog.parent_task["id"] == parent["id"]
+    assert "Part of “Move house”" in dialog.info.text() and "cannot be after" in dialog.info.text()
+    assert dialog.due.maximumDateTime() == to_qt(due.isoformat())  # the form will not take a later one
+    dialog.title.setText("Pack the books")
+    dialog.add_reminder()
+    dialog.save()
+    wait_until(lambda: any(m == "POST" for m, _, _ in state.task_requests))
+    body = [b for m, _, b in state.task_requests if m == "POST"][-1]
+    assert body["parent_id"] == parent["id"] and body["title"] == "Pack the books"
+    wait_until(lambda: dialog.list.count() == 2)
+    assert titles(dialog) == ["Move house", "Pack the books"]
+    dialog.shutdown()
+
+
+def test_finishing_or_deleting_a_task_with_sub_tasks_asks_first(qt, config, server, monkeypatch):
+    _, state = server
+    parent = state.add_task("Move house")
+    state.add_task("Pack", parent_id=parent["id"])
+    dialog = make_dialog(qt, config)
+    wait_until(lambda: dialog.list.count() == 2)
+    dialog.list.setCurrentRow(0)
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: asked.append(args[2]) or QMessageBox.StandardButton.No)
+    dialog.toggle_done()
+    assert "1 sub task still to do" in asked[-1] and not patches(state)
+    dialog.delete()
+    assert "its 1 sub task" in asked[-1] and not [r for r in state.task_requests if r[0] == "DELETE"]
+    dialog.shutdown()

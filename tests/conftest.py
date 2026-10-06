@@ -98,7 +98,7 @@ class State:
         self.requests: list[tuple[str, str, dict]] = []  # (method, path, body) of each request a route answered
 
     def add_task(self, title: str, description: str = "", due: str | None = None, reminders: list[str] | None = None,
-                 sent: int = 0, status: str = "open") -> dict:
+                 sent: int = 0, status: str = "open", parent_id: int | None = None) -> dict:
         """A task as the server describes it. Without reminders Clara picks tomorrow at 09:00 (UTC)."""
         task_id = max(self.tasks, default=0) + 1
         picked = reminders or [(datetime.now(timezone.utc) + timedelta(days=1)).replace(
@@ -108,9 +108,16 @@ class State:
             "id": task_id, "title": title, "description": description, "status": status, "due_at": due,
             "reminders_sent": sent, "max_reminders": 10, "next_reminder": queue[0] if queue else None,
             "reminders": queue, "timezone": "UTC", "targets": [], "created_at": now(), "updated_at": now(),
-            "done_at": now() if status == "done" else None,
+            "done_at": now() if status == "done" else None, "parent_id": parent_id,
         }
         return self.tasks[task_id]
+
+    def described(self, task: dict) -> dict:
+        """The task with what the server adds from the others: how many sub tasks it has, and its limit."""
+        kids = [t for t in self.tasks.values() if t.get("parent_id") == task["id"]]
+        parent = self.tasks.get(task.get("parent_id"))
+        return {**task, "subtasks": {"total": len(kids), "done": sum(k["status"] == "done" for k in kids)},
+                "due_limit": parent.get("due_at") if parent else None}
 
     def add_project(self, name: str, **files: str) -> dict:
         project_id = max(self.projects, default=0) + 1
@@ -294,10 +301,11 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 status = query.get("status", "open")
                 found = [t for t in state.tasks.values() if status == "all" or t["status"] == status]
-                return self.reply(200, {"tasks": found, "max_reminders": 10})
+                return self.reply(200, {"tasks": [state.described(t) for t in found], "max_reminders": 10})
             if not body["title"].strip():
                 return self.reply(422, {"detail": "A task needs a title."})
-            return self.reply(201, state.add_task(body["title"], body["description"], body["due"], body["reminders"]))
+            return self.reply(201, state.add_task(
+                body["title"], body["description"], body["due"], body["reminders"], parent_id=body.get("parent_id")))
         task = state.tasks.get(int(segments[0]))
         if task is None:
             return self.reply(404, {"detail": "No such task of yours."})

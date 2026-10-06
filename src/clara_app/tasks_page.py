@@ -67,9 +67,18 @@ def to_iso(moment: QDateTime) -> str:
     return moment.toPython().replace(second=0, microsecond=0).astimezone().isoformat(timespec="seconds")
 
 
+def latest(*moments: str | None) -> str | None:
+    """The earliest of some moments from the server (ISO), or None when there is none."""
+    given = [m for m in moments if m]
+    return min(given, key=datetime.fromisoformat) if given else None
+
+
 def summary(task: dict) -> str:
     """The second line of a task in the list: what was sent, and what comes next."""
     sent = plural(task["reminders_sent"], "reminder") + " sent"
+    progress = task.get("subtasks") or {}
+    if progress.get("total"):
+        sent = f"{progress['done']}/{progress['total']} sub tasks · {sent}"
     if task["status"] == "done":
         return f"done · {sent}"
     overdue = task.get("due_at") and datetime.fromisoformat(task["due_at"]) < datetime.now().astimezone()
@@ -82,12 +91,13 @@ class TaskRows(QStyledItemDelegate):
     """Draws a task as the web site does: a round box to tick, its title, and what is known about its reminders."""
 
     BOX = 22
+    INDENT = 28  # per level of sub task
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         return QSize(option.rect.width(), 74)
 
-    def box_rect(self, row: QRect) -> QRect:
-        return QRect(row.left() + 16, row.top() + 14, self.BOX, self.BOX)
+    def box_rect(self, row: QRect, depth: int = 0) -> QRect:
+        return QRect(row.left() + 16 + depth * self.INDENT, row.top() + 14, self.BOX, self.BOX)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         t = THEME.t
@@ -102,7 +112,7 @@ class TaskRows(QStyledItemDelegate):
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
         title, _, meta = str(index.data(Qt.ItemDataRole.DisplayRole)).partition("\n")
         done = bool(index.data(ID + 1))
-        box = self.box_rect(rect)
+        box = self.box_rect(rect, int(index.data(ID + 2) or 0))
         painter.setPen(QPen(QColor(t["text"] if done else t["line_strong"]), 2))
         painter.setBrush(QColor(t["text"]) if done else Qt.BrushStyle.NoBrush)
         painter.drawEllipse(box)
@@ -149,10 +159,13 @@ class TasksPage(Page):
         self._list_failed = False  # the status line shows that the list could not be read
         self._due_touched = False
         self._reminders_touched = False
+        self.parent_task: dict | None = None  # the task a new sub task is made for (None: a main task, or one that exists)
+        self._limit: str | None = None  # the latest moment a deadline or reminder of the task in the form may have
 
         intro = QLabel(
             "Your to-do list, the same on the web site and in every chat with Clara. Each task has reminders: choose "
-            "them, or leave it to Clara, who also moves the next ones each time one is sent."
+            "them, or leave it to Clara, who also moves the next ones each time one is sent. A task can be divided "
+            "into sub tasks, each with its own reminders and none of them later than the task's deadline."
         )
         intro.setWordWrap(True)
         tone(intro, "muted")
@@ -229,10 +242,12 @@ class TasksPage(Page):
         self.save_button = push("Save", "primary", self.save)
         self.save_button.setDefault(True)
         self.done_button = push("Mark as done", "", self.toggle_done)
+        self.sub_button = push("Add a sub task", "", self.start_sub)
         self.delete_button = push("Delete…", "danger", self.delete)
         buttons = QHBoxLayout()
         buttons.addWidget(self.delete_button)
         buttons.addWidget(self.done_button)
+        buttons.addWidget(self.sub_button)
         buttons.addStretch(1)
         buttons.addWidget(self.save_button)
         self.status = QLabel("")
@@ -343,7 +358,8 @@ class TasksPage(Page):
             if item is not None:
                 task = next((t for t in self.tasks if t["id"] == item.data(ID)), None)
                 if task is not None:
-                    box = self.list.itemDelegate().box_rect(self.list.visualItemRect(item)).adjusted(-6, -6, 6, 6)
+                    depth = int(item.data(ID + 2) or 0)
+                    box = self.list.itemDelegate().box_rect(self.list.visualItemRect(item), depth).adjusted(-6, -6, 6, 6)
                     if box.contains(event.position().toPoint()):
                         self._show(task)
                         self.toggle_done()
@@ -381,6 +397,7 @@ class TasksPage(Page):
         self.save_button.setEnabled(not busy and bool(self.title.text().strip()))
         self.done_button.setEnabled(task is not None and not busy)
         self.done_button.setText("Reopen" if task is not None and task["status"] == "done" else "Mark as done")
+        self.sub_button.setEnabled(task is not None and task["status"] == "open" and not busy)
         self.delete_button.setEnabled(task is not None and not busy)
         self.new_button.setEnabled(not busy)
         for widget in (self.reminder_time, self.add_reminder_button):
@@ -426,15 +443,17 @@ class TasksPage(Page):
     def _fill_list(self, select: int | None = None) -> None:
         status = self.filter.currentData()
         shown = [t for t in self.tasks if status == "all" or t["status"] == status]
+        rows = self._rows(status)
         if select is None and self.task:
             select = self.task["id"]
         self.list.blockSignals(True)
         self.list.clear()
         chosen = None
-        for task in shown:
+        for task, depth in rows:
             item = QListWidgetItem(f"{task['title']}\n{summary(task)}")
             item.setData(ID, task["id"])
             item.setData(ID + 1, task["status"] == "done")
+            item.setData(ID + 2, depth)
             self.list.addItem(item)
             if task["id"] == select:
                 chosen = item
@@ -443,10 +462,47 @@ class TasksPage(Page):
         self.list.blockSignals(False)
         open_count = sum(1 for t in self.tasks if t["status"] == "open")
         self.count.setText(plural(open_count, "open task") if self.tasks else "No task yet")
-        self.list.setFixedHeight(74 * len(shown) + 2 if shown else 0)
+        self.list.setFixedHeight(74 * len(rows) + 2 if rows else 0)
+        shown = rows
         self.empty.setText("" if shown else {"done": "Nothing is done yet. Finished tasks stay here.", "open": "No task yet. Add one with New task, or tell Clara in a chat: “add a task: send the invoice by Friday”."}.get(status, "No task yet."))
         self.empty.setVisible(not shown)
-        self.calendar.set_tasks(shown)
+        self.calendar.set_tasks([t for t in self.tasks if status == "all" or t["status"] == status])
+
+    def _kids(self, task_id: int) -> list[dict]:
+        return sorted((t for t in self.tasks if t.get("parent_id") == task_id), key=lambda t: t["id"])
+
+    def _below(self, task: dict) -> list[dict]:
+        """Its sub tasks, theirs, and so on."""
+        found: list[dict] = []
+        for kid in self._kids(task["id"]):
+            found.append(kid)
+            found.extend(self._below(kid))
+        return found
+
+    def _rows(self, status: str) -> list[tuple[dict, int]]:
+        """What the list draws, in order, with how deep each is: the main tasks that match the filter, each followed
+        by its sub tasks."""
+        known = {t["id"]: t for t in self.tasks}
+
+        def is_root(task: dict) -> bool:
+            parent = known.get(task.get("parent_id"))
+            if status == "done":  # a done sub task of a task still to do is listed on its own
+                return task["status"] == "done" and (parent is None or parent["status"] != "done")
+            if status == "open":
+                return task["status"] == "open" and parent is None
+            return parent is None
+
+        rows: list[tuple[dict, int]] = []
+
+        def walk(task: dict, depth: int) -> None:
+            rows.append((task, depth))
+            for kid in self._kids(task["id"]):
+                walk(kid, depth + 1)
+
+        for task in self.tasks:
+            if is_root(task):
+                walk(task, 0)
+        return rows
 
     def _clean(self, task: dict) -> bool:
         """Is the form as the server has the task (nothing typed, nothing chosen)?"""
@@ -474,9 +530,29 @@ class TasksPage(Page):
         self.form_dialog.open()
         self.title.setFocus()
 
-    def _show(self, task: dict | None) -> None:
+    def start_sub(self) -> None:
+        """Open the form for a new sub task of the task in the form."""
+        parent = self.task
+        if parent is None or parent["status"] != "open":
+            return
+        self._show(None, parent)
+        self.form_dialog.setWindowTitle("New sub task")
+        self.title.setFocus()
+
+    def _apply_limit(self) -> None:
+        """Nothing of a sub task may be later than the deadline of the tasks it is part of."""
+        top = to_qt(self._limit) if self._limit else QDateTime(QDate(7999, 12, 31), QTime(23, 59))
+        self.due.setMaximumDateTime(top)
+        self.reminder_time.setMaximumDateTime(top)
+
+    def _show(self, task: dict | None, parent: dict | None = None) -> None:
         self._loading = True
         self.task = task
+        self.parent_task = parent
+        self._limit = (
+            task.get("due_limit") if task else latest(parent.get("due_at"), parent.get("due_limit")) if parent else None
+        )
+        self._apply_limit()
         self.title.setText(task["title"] if task else "")
         self.description.setPlainText(task["description"] if task else "")
         due = task.get("due_at") if task else None
@@ -499,15 +575,25 @@ class TasksPage(Page):
 
     def _refresh_info(self) -> None:
         task = self.task
+        above = self.parent_task or (next((t for t in self.tasks if t["id"] == task.get("parent_id")), None) if task else None)
+        part_of = ""
+        if above is not None:
+            part_of = f"Part of “{above['title']}”."
+            if self._limit:
+                part_of += f" Its deadline and reminders cannot be after {local(self._limit)}."
         if task is None:
-            self.info.setText("")
+            self.info.setText(part_of)
             self.hint.setText(
-                "A new task. Without a reminder, Clara chooses when to remind you, and moves the next ones each time "
-                "one is sent."
+                f"A new {'sub task' if self.parent_task else 'task'}. Without a reminder, Clara chooses when to remind "
+                "you, and moves the next ones each time one is sent."
             )
             return
         lines = [f"{'Done' if task['status'] == 'done' else 'To do'} · {plural(task['reminders_sent'], 'reminder')} "
                  f"sent (at most {self.limit} are sent for a task)"]
+        if part_of:
+            lines.append(part_of)
+        if (task.get("subtasks") or {}).get("total"):
+            lines.append(f"{task['subtasks']['done']} of {plural(task['subtasks']['total'], 'sub task')} done.")
         if task["status"] == "open":
             lines.append(f"Next reminder: {local(task['next_reminder'])}" if task["next_reminder"] else "No reminder to come.")
         self.info.setText("\n".join(lines))
@@ -556,8 +642,10 @@ class TasksPage(Page):
         task = self.task
         if task is None:
             self._say("Adding…" if self._times() else "Clara is choosing the reminders…")
+            parent_id = self.parent_task["id"] if self.parent_task else None
             self._call(
-                lambda api: api.add_task(title, self.description.toPlainText(), due, self._times()), self._saved, True
+                lambda api: api.add_task(title, self.description.toPlainText(), due, self._times(), parent_id),
+                self._saved, True,
             )
             return
         fields: dict = {"title": title, "description": self.description.toPlainText()}
@@ -572,6 +660,13 @@ class TasksPage(Page):
         if task is None:
             return
         reopening = task["status"] == "done"
+        unfinished = 0 if reopening else sum(1 for kid in self._below(task) if kid["status"] == "open")
+        if unfinished and QMessageBox.question(
+            self, "Mark as done", f"“{task['title']}” has {plural(unfinished, 'sub task')} still to do: they will be "
+            "marked as done too.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
         self._say("Reopening: Clara is choosing the next reminders…" if reopening else "")
         self._call(
             lambda api: api.change_task(task["id"], status="open" if reopening else "done"), self._saved, True
@@ -581,8 +676,10 @@ class TasksPage(Page):
         task = self.task
         if task is None:
             return
+        parts = self._below(task)
+        also = f", its {plural(len(parts), 'sub task')}" if parts else ""
         answer = QMessageBox.question(
-            self, "Delete the task", f"“{task['title']}” and its reminders will be deleted for good.",
+            self, "Delete the task", f"“{task['title']}”{also} and the reminders will be deleted for good.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
         )
         if answer == QMessageBox.StandardButton.Yes:
@@ -608,10 +705,11 @@ class TasksPage(Page):
             self._say(error, bad=True)
             return
         self._changes += 1
-        gone = self.task["id"] if self.task else None
-        self.tasks = [t for t in self.tasks if t["id"] != gone]
+        gone = {self.task["id"], *(kid["id"] for kid in self._below(self.task))} if self.task else set()
+        self.tasks = [t for t in self.tasks if t["id"] not in gone]
         self.task = None
         self._fill_list()
         self._show(None)
         self._say("Deleted.")
         self.changed.emit()
+        self.reload()  # the task it was part of may be done now
