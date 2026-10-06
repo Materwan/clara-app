@@ -166,6 +166,16 @@ class TestReminderWorker:
         worker.stop()
         assert worker.wait(5000)
 
+    def test_a_refused_token_stops_the_worker_instead_of_retrying(self, qt, config, server):
+        config.token = "wrong"
+        refused = []
+        worker = ReminderWorker(lambda: ClaraApi(config), pause=0.05)
+        worker.rejected.connect(refused.append)
+        worker.start()
+        wait_until(lambda: len(refused) == 1)
+        assert worker.wait(5000)  # it ended by itself: no retry every few seconds
+        assert len(refused) == 1
+
     def test_stop_ends_a_worker_blocked_on_a_quiet_stream(self, qt, config, server):
         _, state = server
         state.reminders = []

@@ -17,6 +17,7 @@ from .api import ApiError, ClaraApi, EventStream, login
 from .documents import DocumentError, read_document
 
 RECONNECT_SECONDS = 5.0
+BLOCKED_SECONDS = 300.0  # the server refuses an address for this long after too many wrong tokens (429)
 
 
 class ChatWorker(QThread):
@@ -82,6 +83,7 @@ class ReminderWorker(QThread):
     job = Signal(dict)  # Clara asks something of a folder of this computer
     connection = Signal(bool)
     server = Signal(str)
+    rejected = Signal(str)  # the server does not accept the token: retrying would only get this address blocked
 
     def __init__(self, api_factory: Callable[[], ClaraApi], pause: float | None = None, parent=None):
         super().__init__(parent)
@@ -118,12 +120,21 @@ class ReminderWorker(QThread):
                         self.job.emit(event)
                     elif kind == "server":
                         self.server.emit(str(event.get("state", "")))
-            except ApiError:
-                pass  # server down, token refused...: try again; what was missed arrives then
+            except ApiError as error:
+                if error.status == 401:
+                    self._stream = None
+                    if not self._stop.is_set():
+                        self.connection.emit(False)
+                        self.rejected.emit(str(error))
+                    return
+                pause = BLOCKED_SECONDS if error.status == 429 else self._pause
+                # server down...: try again; what was missed arrives then
+            else:
+                pause = self._pause
             if not self._stop.is_set():
                 self.connection.emit(False)
             self._stream = None
-            self._stop.wait(self._pause)
+            self._stop.wait(pause)
 
 
 class LoginWorker(QThread):

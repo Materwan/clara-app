@@ -51,7 +51,12 @@ def _project(project_id: int) -> str:
 
 
 class ApiError(Exception):
-    """The server could not be reached, or refused the request. The message is fit to show."""
+    """The server could not be reached, or refused the request. The message is fit to show; `status` is the HTTP
+    status of a refusal (None when the server could not be reached)."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @functools.cache
@@ -149,7 +154,7 @@ class ClaraApi:
             response = client.send(client.build_request(method, path, **options), stream=True)
             if response.is_error:
                 response.read()
-                raise ApiError(_refused(response, self._user_token))
+                raise ApiError(_refused(response, self._user_token), response.status_code)
         except httpx.ConnectError:
             client.close()
             raise ApiError(f"Cannot reach the Clara server at {self.base}.") from None
@@ -172,7 +177,7 @@ class ClaraApi:
         except httpx.HTTPError as error:
             raise ApiError(f"The Clara server did not answer: {error}") from None
         if response.is_error and response.status_code not in accept:
-            raise ApiError(_refused(response, self._user_token))
+            raise ApiError(_refused(response, self._user_token), response.status_code)
         return response
 
     # -- the server ---------------------------------------------------------------- #

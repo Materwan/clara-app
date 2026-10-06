@@ -181,6 +181,7 @@ class ClaraApplication(QObject, Calls):
         self.listener.job.connect(lambda _event: self.do_jobs())
         self.listener.connection.connect(self._connection)
         self.listener.server.connect(self._server_said)
+        self.listener.rejected.connect(self._token_rejected)
         self.listener.start()
 
     def stop_listener(self) -> None:
@@ -189,6 +190,11 @@ class ClaraApplication(QObject, Calls):
             listener.stop()
             listener.wait(3000)
             listener.deleteLater()
+
+    def _token_rejected(self, reason: str) -> None:
+        """The server no longer knows this sign-in: ask for the password instead of retrying with it."""
+        self.tray.notify(APP_NAME, reason)
+        self.sign_out()
 
     def _connection(self, online: bool) -> None:
         if not online:  # the server cannot be reached (or the connection broke without a word)
