@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLay
 
 from . import mathview
 from .icons import portrait_label
+from .links import open_external
 from .widgets import label
 
 USER, CLARA, NOTE, ERROR = "user", "clara", "note", "error"
@@ -67,7 +68,8 @@ class MessageBubble(QFrame):
         self.label = QLabel()
         self.label.setTextFormat(Qt.TextFormat.MarkdownText)
         self.label.setWordWrap(True)
-        self.label.setOpenExternalLinks(True)
+        self.label.setOpenExternalLinks(False)  # not every address: see links.py
+        self.label.linkActivated.connect(open_external)
         self.label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )

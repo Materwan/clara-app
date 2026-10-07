@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +28,7 @@ from .api import ClaraApi
 from .approvals import ApprovalCard
 from .config import Config
 from .icons import bind_icon, icon
+from .links import open_external
 from .local_folders import FolderError, FolderRegistry
 from .widgets import (
     Calls,
@@ -743,7 +743,7 @@ class IntegrationsPage(Page, Calls):
             if error:
                 self.status.say(error, bad=True)
                 return
-            QDesktopServices.openUrl(QUrl(dict(result)["url"]))  # type: ignore[arg-type]
+            open_external(dict(result)["url"])  # type: ignore[arg-type]
             self.status.say("Finish in your browser: this page updates when you are back.")
             self._before = repr([(a["id"], a["status"]) for a in (self.data or {}).get("accounts", [])])
             self._polls = 0

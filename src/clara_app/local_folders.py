@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .api import ApiError, ClaraApi
-from .config import config_dir
+from .config import config_dir, write_private
 from .documents import DocumentError, read_document
 
 REGISTRY_FILE = "computer-folders.json"
@@ -69,16 +69,16 @@ class FolderRegistry:
         return registry
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps({"device": self.device, "name": self.name, "folders": self.folders}, indent=2), encoding="utf-8"
-        )
+        write_private(self.path, json.dumps({"device": self.device, "name": self.name, "folders": self.folders}, indent=2))
 
     def add(self, folder: str | Path) -> str:
         """Let Clara work in this folder; returns its alias (the folder's name, made unique)."""
         real = Path(folder).resolve()
         if not real.is_dir():
             raise FolderError(f"{folder} is not a folder.")
+        home = Path.home().resolve()
+        if real.parent == real or real == home or real in home.parents:
+            raise FolderError(f"{real} is too wide: Clara could then read and change everything in it. Choose a folder inside it.")
         for alias, existing in self.folders.items():
             if Path(existing).resolve() == real:
                 return alias

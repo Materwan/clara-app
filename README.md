@@ -21,6 +21,9 @@ about 780 pixels wide the rail slides in over the page, behind a menu button, so
   (or use the "…" of the page header) to **rename**, **pin**, **move to a project** or **delete** it. The search box
   looks in titles and messages. Clara titles a conversation after its first answer. While she writes, the list waits:
   an answer is kept only once it is complete.
+- **Links** in Clara's answers, in files and in what the server sends open only `http`, `https` and `mailto` addresses
+  (never `file:`, a network share or a program's own scheme). A folder Clara may work in cannot be a drive or your home
+  folder (too wide): add the folder you want.
 - **Projects**: files, folders and GitHub repositories Clara uses in every conversation of the project, with
   instructions of their own, kept by the server (the same here and on the web site). The projects are cards; a click opens
   the project's page (a way back, what it is about, its conversations, its files). *Add files…*
@@ -72,7 +75,8 @@ python -m venv .venv
 The first time, a dialog asks for the server (`http://127.0.0.1:8765` by default), your **user name and
 password** (the administrator makes them with `/user add`) and, if you like, your name. *Test connection* signs
 in and checks. The password is used once and **not kept**: the server gives the app a sign-in token, saved in
-`%APPDATA%\clara-app\config.json` as plain text (like the `.env` files of the other clients), next to the theme you
+`%APPDATA%\clara-app\config.json` as plain text (like the `.env` files of the other clients; on Linux and macOS the file is
+readable by your user only), next to the theme you
 chose. If the token stops working (you were signed out, the password changed) the app says so: sign in again from the
 Account page. A shared client token (an entry of `CLARA_TOKENS`) still works in the *Sign-in token* field, or
 `CLARA_TOKEN` in the environment (the Account, Admin and Discord pages are for users, so they say what they cannot show

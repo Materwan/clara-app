@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from .api import ClaraApi
 from .config import Config
 from .icons import bind_icon
+from .links import open_external
 from .widgets import Calls, Column, EmptyState, Page, Panel, Segmented, StatusLine, ago, button, confirm, divider, label
 
 MONO = "font-family: Consolas, monospace; font-weight: 600; font-size: 15px;"
@@ -56,7 +57,9 @@ class FilesPage(Page, Calls):
         self.mode = Segmented([("preview", "Preview"), ("source", "Markdown")], "preview")
         self.mode.chosen.connect(self._mode)
         self.preview = QTextBrowser()
-        self.preview.setOpenExternalLinks(True)
+        self.preview.setOpenLinks(False)  # not every address: see links.py
+        self.preview.setOpenExternalLinks(False)
+        self.preview.anchorClicked.connect(open_external)
         self.source = QPlainTextEdit()
         self.source.setReadOnly(True)
         self.source.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)

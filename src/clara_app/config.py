@@ -80,7 +80,16 @@ def load(path: Path | None = None, env: Mapping[str, str] | None = None) -> Conf
     return config
 
 
-def save(config: Config, path: Path | None = None) -> None:
-    path = path or config_dir() / "config.json"
+def write_private(path: Path, text: str) -> None:
+    """Write a file that holds a secret (the token) or a list the server must not learn (the folders): whole or not at
+    all, and readable by this user only (created with that mode, so not even for a moment by others)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    temporary = path.with_name(path.name + ".tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(temporary, path)
+
+
+def save(config: Config, path: Path | None = None) -> None:
+    write_private(path or config_dir() / "config.json", json.dumps(asdict(config), indent=2))

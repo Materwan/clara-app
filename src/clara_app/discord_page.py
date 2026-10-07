@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .api import ClaraApi
 from .config import Config
+from .links import open_external
 from .widgets import (
     Calls,
     Column,
@@ -274,7 +275,7 @@ class DiscordPage(Page, Calls):
         ], 4))
         if bot.get("invite_url"):
             row = QHBoxLayout()
-            row.addWidget(button("Invite to a server", "", lambda: QDesktopServices.openUrl(QUrl(bot["invite_url"]))))
+            row.addWidget(button("Invite to a server", "", lambda: open_external(bot["invite_url"])))
             row.addWidget(button("Copy the link", "ghost", lambda: QGuiApplication.clipboard().setText(bot["invite_url"])))
             row.addStretch(1)
             panel.add(row)

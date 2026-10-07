@@ -20,9 +20,10 @@ from string import Template
 
 from markdown_it import MarkdownIt
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QSizePolicy, QWidget
 
+from .links import open_external
 from .theme import THEME
 
 try:  # Qt WebEngine is a large optional part of PySide6: without it formulas stay as their source
@@ -34,7 +35,6 @@ except ImportError:  # pragma: no cover - depends on the installation
     WEBENGINE = False
 
 KATEX_DIR = Path(__file__).parent / "katex"
-SAFE_LINKS = ("http", "https", "mailto")
 HEIGHT_PREFIX = "h:"  # the page tells its height through its title, which Qt reports as a signal
 WHEEL_NOTCH = 120  # angleDelta of one notch of a mouse wheel
 WHEEL_LINES = 3  # lines a notch scrolls
@@ -171,8 +171,7 @@ if WEBENGINE:
     class _Page(QWebEnginePage):
         def acceptNavigationRequest(self, url: QUrl, kind, is_main_frame: bool) -> bool:
             if kind == QWebEnginePage.NavigationType.NavigationTypeLinkClicked:
-                if url.scheme() in SAFE_LINKS:
-                    QDesktopServices.openUrl(url)
+                open_external(url)  # only web pages and mail: see links.py
                 return False
             return url.scheme() in ("file", "about", "data", "")
 
