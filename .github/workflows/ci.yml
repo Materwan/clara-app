@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    # The app is a Windows app (tray, WebView2, Start with Windows): it is built and tested where it runs.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  installer:
+    # The installer (NSIS), when asked for from the Actions tab.
+    if: github.event_name == 'workflow_dispatch'
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install tauri-cli --version "^2" --locked
+      - run: cargo tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clara-installer
+          path: target/release/bundle/nsis/*.exe

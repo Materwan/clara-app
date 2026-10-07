@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The settings page of the app. The window of the site is another origin and is given nothing.",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}

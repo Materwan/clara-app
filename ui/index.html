@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clara settings</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header class="brand">
+    <img src="clara.png" alt="" width="44" height="44">
+    <div>
+      <h1>Clara</h1>
+      <p id="subtitle">Your conversations, and what she remembers about you.</p>
+    </div>
+  </header>
+
+  <p id="notice" class="notice" role="status" hidden></p>
+
+  <section id="sign-in" hidden aria-labelledby="sign-in-title">
+    <form id="sign-in-form" class="card" autocomplete="on">
+      <h2 id="sign-in-title">Sign in</h2>
+      <p class="help">The app shows your Clara server's web site, and keeps running in the notification area so that reminders reach you.
+        Your password is used once and is not kept.</p>
+      <label for="url">Server</label>
+      <input id="url" name="url" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="http://127.0.0.1:8765" required>
+      <p id="url-advice" class="advice" hidden></p>
+      <label for="user">User name</label>
+      <input id="user" name="username" type="text" autocomplete="username" spellcheck="false" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <p id="sign-in-error" class="error" role="alert" hidden></p>
+      <div class="actions"><button id="sign-in-button" type="submit" class="primary">Sign in</button></div>
+    </form>
+  </section>
+
+  <section id="signed-in" hidden>
+    <div class="card" aria-labelledby="connection-title">
+      <h2 id="connection-title">Connection</h2>
+      <dl>
+        <dt>Server</dt><dd id="server-url"></dd>
+        <dt>Signed in as</dt><dd id="user-name"></dd>
+        <dt>Status</dt><dd id="server-status"></dd>
+      </dl>
+      <div class="actions">
+        <button id="open-site" type="button" class="primary">Open Clara</button>
+        <button id="sign-out" type="button">Sign out</button>
+      </div>
+    </div>
+
+    <div class="card" aria-labelledby="folders-title">
+      <h2 id="folders-title">Folders on this computer</h2>
+      <p class="help">Clara can read and change files in the folders you add here, and only in those, while this app is running.
+        Replacing or deleting something asks your permission first. The server never learns where a folder is: it only knows its name below
+        and this computer (<span id="computer"></span>).</p>
+      <ul id="folders" class="folders"></ul>
+      <p id="no-folders" class="empty" hidden>No folder yet: Clara cannot see anything on this computer.</p>
+      <p id="folders-error" class="error" role="alert" hidden></p>
+      <div class="actions"><button id="add-folder" type="button">Add a folder…</button></div>
+    </div>
+
+    <div class="card" aria-labelledby="startup-title">
+      <h2 id="startup-title">Start-up</h2>
+      <label class="check"><input id="autostart" type="checkbox"> Start with Windows, in the notification area</label>
+    </div>
+  </section>
+
+  <footer><span id="version"></span></footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

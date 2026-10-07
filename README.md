@@ -4,162 +4,97 @@ The [Clara server](../clara-server/README.md)'s web site, as a desktop app. It l
 **click the icon to open the window**, click it again (or close the window) to put it away. The app keeps running in
 the tray, where reminders and notifications reach you.
 
-The window is the web site's: a rail of Prussian blue on the left with Clara's portrait, a **New chat** button, the
-pages you work in (*Chat, Projects, Tasks, Files*), your conversations, and you at the bottom; the page beside it. It
-keeps your conversations in the rail on every page you work in (not on the settings pages), follows Windows' light or dark setting (or your choice, on the Account page) and uses the site's two fonts. Below
-about 780 pixels wide the rail slides in over the page, behind a menu button, so the window can also be a narrow one.
+The window **is the web site**: chat, projects, tasks, files, memory, account, administration (the same pages, the same
+fonts and theme, everything the site does). The app does not draw any of it; what it adds is what only a program on this
+computer can do:
 
-- **Chat**: your messages in a violet-tinted bubble on the right, Clara's answers (Markdown, formulas) on the left
-  beside her portrait, with a quiet line under a reply that says what she used (*Set a reminder*, *Looked in memory
-  for…*). The box you write in is as wide as the conversation; **Enter** sends, **Shift+Enter** starts a new line.
-  The 📎 button (or dropping files on the window) attaches PDF, code, Markdown or any text file: they are read **on this
-  computer** and sent with your next message. When an administrator offers several models, a quiet picker in the box
-  chooses the one Clara answers you with here, with what a token costs in credits (see the Account page).
-- **Conversations**, in the rail: pinned ones first, then by day (*Today*, *Yesterday*, *Previous 7 days*...) for the
-  chats that belong to no project, then **one group for each project**, named after it, with its conversations newest
-  first (click the project's name to open it). Click a conversation to read it again and go on with it; right-click it
-  (or use the "…" of the page header) to **rename**, **pin**, **move to a project** or **delete** it. The search box
-  looks in titles and messages. Clara titles a conversation after its first answer. While she writes, the list waits:
-  an answer is kept only once it is complete.
-- **Projects**: files, folders and GitHub repositories Clara uses in every conversation of the project, with
-  instructions of their own, kept by the server (the same here and on the web site). The projects are cards; a click opens
-  the project's page (a way back, what it is about, its conversations, its files). *Add files…*
-  (text, code, PDF, Word, `.zip`), *Add a folder…*, *GitHub…* (the server downloads a repository; *Sync* gets its
-  latest version); double-click a file to read it. **New chat in this project** starts a chat there: that is how a
-  chat gets into a project (or move one from the rail).
-- **Tasks**: your to-do list, the same on the web site, in the terminal and in every chat with Clara ("add a task: send
-  the invoice by Friday"), as a list (tick the round box to finish a task, click it to edit it in a dialog) or a month
-  calendar of deadlines and reminders. Each task shows how many reminders were sent and the next one; a task without a reminder gets
-  them chosen by Clara, who moves the next ones each time one is sent, so the page reads the list again every 30 seconds.
-- **Files**: the Markdown files Clara wrote for you, one row each: click a name to read it (rendered or as Markdown), or copy, save or delete it.
-- **QCM**: a quiz or a questionnaire from Clara appears in the conversation with radio buttons, check boxes or a text
-  box; **Send answers** sends them as your next message and a graded form then shows your score and her explanations.
-- **Formulas**: Clara writes LaTeX (`$x^2$`, `\(x^2\)`, `$$…$$`, `\[…\]`) and the app typesets it with KaTeX (the files
-  are in `clara_app/katex/`, the same as the web site's). A message that holds a formula is shown by a small embedded
-  web view (Qt WebEngine); the others stay ordinary labels, which are lighter. The view loads nothing but the local
-  KaTeX files, and raw HTML in an answer is shown as text.
-- **Your settings** are reached by clicking you at the bottom of the rail, and share a bar of tabs at the top:
-  - **Memory**: what Clara remembers about you, to add to or take away from.
-  - **Account**: who you are, the theme (*Auto, Light, Dark*), your usage today in credits, the model Clara answers
-    you with in the app, when a finished task notifies you, your password, the devices you are signed in on, and the
-    connection to the server. *Sign out* forgets the sign-in on this computer.
-  - **Discord** and **Admin** (administrators only): the bot built into the server, its servers and signed-in accounts;
-    and users (add, password, limits, sign out), the models people may choose and what they cost, the server's status and
-    model, what Clara knows about each person, and the server's console. The same as on the web site.
-- **Reminders** (`/remind` in `clara-chat` or the console, or "remind me…" to Clara) are yours only: they pop up as a
-  Windows notification even when the window is hidden, when they were set for every client of yours or for the app
-  (`@app`; Clara picks this herself when you say "on my desktop"). The notification holds **the message Clara wrote for
-  it** (the reminder's own text if she could not), and ends with the state of the server. Clicking it opens the app. What
-  fired while the app was closed arrives when it starts, marked *missed*.
-- **Notifications** pop up the same way: from Clara (when she has finished a long task you asked about), from the server
-  (an answer that took long is ready, the conversation was summarised, the model changed) or from another client. One
-  about the conversation you are looking at, while the window is in front, is only noted in the conversation.
-- **The state of the server** is under your name in the rail ("Clara is running", "stopping", "not running"), in the
-  icon's tooltip, and by a notification whenever it changes. The icon (`clara_app/clara.ico`, the same portrait as the
-  web site's) turns grey when Clara is not running.
-- Right-click the icon: Open, Tasks…, Settings… (the Account page), **Start with Windows**, Quit.
-- Starting the app a second time just shows the window of the one already running.
+- **Notifications.** Reminders, "your answer is ready", requests for permission nobody answered in time, and the server
+  stopping or coming back pop up as Windows notifications even when the window is hidden. A reminder shows the message
+  Clara wrote for it and the state of the server; one that fired while the app was closed arrives when it starts,
+  marked *missed*.
+- **Folders of this computer.** Clara can read, search and change files in the folders you add (tray menu, *Settings and
+  folders…*), and only in those, only while the app is running. The server never learns the path, only a name for the
+  folder and an id for this computer; every path a job names is checked to stay inside the folder (no `..`, no
+  absolute path, no link that leaves it). Replacing or deleting asks your permission first, like everywhere else.
+- **The tray.** The icon turns grey when Clara is not running; its tooltip says so. Right click: Open, Tasks…,
+  Settings and folders…, Start with Windows, Quit. Starting the app a second time just shows the window of the one
+  already running.
+- **Sign-in once.** You type the server, your user name and your password in the app; it signs in for itself (reminders,
+  folders) and for the site, whose session it puts in the window, so the site does not ask again. The password is not kept.
 
-## Install and run
+## Why it is built this way
 
-```powershell
-cd clara-app
-python -m venv .venv
-.venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\clara-app            # or: .venv\Scripts\python -m clara_app
+The first version of this app (the `main` branch, Python and Qt) drew every page of the site again in native widgets:
+about 10,000 lines that said the same thing as the site's 7,000, and every new feature (sub tasks, connections...) had to
+be written twice. This one shows the site itself, and keeps native code only for what a web page cannot do.
+
+```
+crates/agent/        clara-agent: the logic, with no window and no Tauri (this is what the tests cover)
+  config.rs            the server address and sign-in, in %APPDATA%\clara-app\config.json (same file as before)
+  api.rs               the few routes of the server the app calls: sign in (app and web), the event stream, the jobs
+  listen.rs, events.rs the stream of reminders / notifications / jobs, kept open; and the words of a notification
+  folders.rs           the folders Clara may work in: the registry, the path checks, list / read / search / write / delete / move
+  documents.rs         the text of a file (a PDF page by page, text in UTF-8 or Windows-1252)
+  jobs.rs              fetching what Clara asked of this computer, doing it, answering; one run at a time
+  navigation.rs        where the window may go (the server and the app's own pages; other sites open in the browser)
+  status.rs, icon.rs   the states of the server in words; the grey icon
+src-tauri/           the Tauri shell: wires the agent to the screen
+  windows.rs           the site's window and the settings window
+  tray.rs, runtime.rs  the icon and its menu; the thread that listens and shows notifications
+  commands.rs          what the settings page can ask for (sign in/out, folders, start-up)
+ui/                  the settings page (plain HTML, CSS and JS: no build step, like the site) and the loading page
 ```
 
-The first time, a dialog asks for the server (`http://127.0.0.1:8765` by default), your **user name and
-password** (the administrator makes them with `/user add`) and, if you like, your name. *Test connection* signs
-in and checks. The password is used once and **not kept**: the server gives the app a sign-in token, saved in
-`%APPDATA%\clara-app\config.json` as plain text (like the `.env` files of the other clients), next to the theme you
-chose. If the token stops working (you were signed out, the password changed) the app says so: sign in again from the
-Account page. A shared client token (an entry of `CLARA_TOKENS`) still works in the *Sign-in token* field, or
-`CLARA_TOKEN` in the environment (the Account, Admin and Discord pages are for users, so they say what they cannot show
-with it); `CLARA_URL` fills in the server when the file leaves it empty. For a server reached through Tailscale, type
-its `https://<machine>.<tailnet>.ts.net` address (the dialog warns about plain `http://` to another machine).
+The window of the site is a page of another origin, so Tauri gives it no access to the app's commands: only the
+settings page (a page of the app itself) can call them. Links that leave the server (GitHub, Google's consent page...)
+open in your browser.
 
-The app speaks to the server as the surface **`app`**. If the server limits the surfaces of its
-tokens, add it: `CLARA_CLIENT_SURFACES=...,app=app`. Its account is `app:<your id>`, and its conversations
-are `app:<your id>:<random>`; to share
-what Clara knows with your other clients, link the accounts (see the server README). Linking matters
-for reminders and notifications too: they reach the app only when `app:<your id>` is the same person
-as the account they were set from.
+## Build and run
 
-## Using it
+Windows 10/11 with [Rust](https://rustup.rs) (stable) and the WebView2 runtime (already in Windows 11).
 
-| | |
-|---|---|
-| `Enter` | send (`Shift+Enter` for a new line) |
-| **Stop** (the send button while Clara writes) | stop the answer; what has arrived is kept |
-| **New chat** | start a new conversation; the one shown stays in the list |
-| right click in the list, or "…" | rename, pin / unpin, move to a project, delete (erased on the server; what Clara knows about you stays) |
-| click you, bottom of the rail | Memory, Account, Integrations, Discord, Admin |
-| **Waiting for you** (bottom of the rail) | the requests Clara made that need your permission (also on a notification) |
-| **Connections** (the plug in a chat's header, or on a project's page) | what Clara can reach there: GitHub, Google Drive, folders |
-| left click on the icon | show / hide the window |
-| double click on the icon | open the window |
+```powershell
+cargo install tauri-cli --version "^2" --locked   # once
+cargo tauri dev                                   # runs the app
+cargo tauri build                                 # the installer: target\release\bundle\nsis\
+cargo test --workspace                            # the tests
+```
 
-"Start with Windows" adds a `ClaraApp` value to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-that starts `pythonw -m clara_app --background`: the app then goes straight to the tray without
-opening the window. Untick it to remove the value.
+The first time, the app asks for the server (`http://127.0.0.1:8765` by default; for a server reached through
+Tailscale, its `https://<machine>.<tailnet>.ts.net` address), your user name and your password (the administrator makes
+them with `/user add`). The sign-in token is saved in `%APPDATA%\clara-app\config.json` as plain text (like the `.env`
+files of the other clients), the folders in `computer-folders.json` next to it. Both files are the ones the earlier
+Python app wrote: nothing to sign in or add again after switching. `CLARA_URL` and `CLARA_TOKEN` in the environment still
+fill in what the file leaves empty.
 
-Closing the window does not stop the app: use **Quit** in the tray menu.
+The app speaks to the server as the surface **`app`** (`CLARA_CLIENT_SURFACES=...,app=app` if the server limits the
+surfaces of its tokens) and the site as **`web`**: the two are the same person, so conversations are the same in both. If
+the server stops accepting the app's token (you were signed out, the password changed) the app says so and opens the
+settings page to sign in again.
 
-## What it does not do (yet)
+"Start with Windows" adds a value to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts the app with
+`--background`: it then goes straight to the tray without opening the window.
 
-- The list shows the conversations started in the app **and on the web site** (the same list there, and the same
-  projects): you can read, go on with, rename, pin, move or delete either's. While the window shows, the list and the
-  projects are read again every 30 seconds and when the window comes to the front, and the conversation shown is read
-  again if it went on elsewhere (never while Clara is writing). Those of `clara-chat`, the console or Discord are not in
-  it. The single conversation of earlier versions (`app:<your id>`) is not in it; its messages stay on the server.
-  This needs the server of this version: an older one lists only the app's own.
-- A conversation shows its last 200 messages. When older ones were deleted after a summary
-  (`CLARA_PURGE_SUMMARISED` on the server), the summary is shown in their place. Attached documents show
-  as their names: their text is not shown again. What Clara used to answer (the line under a reply) is shown
-  for the answers written in this session only: the server does not keep the tool calls with the messages.
-- It runs no tools on your computer (shell...): Clara reads the documents you attach. She can work in a folder of
-  this computer **only if you added it** (Integrations, *Add*, *Folder on this computer*) and only while the app is
-  running: the app keeps the list of those folders (`computer-folders.json`, next to its settings), does what the
-  server asks inside them, refuses any path that leaves them, and the server never learns where they are. Replacing or
-  deleting there asks your permission first, like everywhere else (*Integrations*). The server's own tools
-  (`remember`, `remind`, `notify`...) work.
+## What it does not do
+
+- **A click on a notification does not open the window** (Windows notifications from Tauri carry no click handler):
+  click the tray icon instead.
+- **Signing out inside the site** (its own *Sign out*) ends the site's session only; the app keeps listening for
+  reminders until you *Sign out* in the app's settings.
+- It runs no tools on your computer other than the folder jobs above (no shell).
 - A scanned PDF (images of pages) has no text to read: there is no OCR.
-- Windows only for the start-up entry; the rest is Qt and should run elsewhere, but the tray is
-  only tested on Windows 11.
+- Windows only for the start-up entry and the tray; the rest should run elsewhere but is not tested there.
 
-## Layout
+## Checking a build by hand
 
-```
-src/clara_app/
-  __main__.py       entry point: Qt application, single instance, --background
-  app.py            ties the tray, the window and the reminder listener together; saves the theme
-  theme.py          the site's colours as a palette and a style sheet, light and dark; the fonts
-  icons.py          the site's line icons, drawn in the colour of the theme, and Clara's portrait
-  widgets.py        panels, badges, notices, tables, dialogs, and `Calls` (how a page talks to the server)
-  shell.py          the frame: the rail, the page header, the settings tabs, the rail as a drawer
-  chat_window.py    the window: the chat page (box, send/stop, documents, model picker) and what the rail asks of it
-  chat_view.py      the conversation: bubbles, Clara's portrait, the line of what she used, the greeting
-  history.py        the conversations in the rail: search, days, projects, menu
-  projects_page.py  Projects          tasks_page.py     Tasks            files_page.py    Files
-  memory_page.py    Memory            account_page.py   Account          discord_page.py  Discord
-  admin_page.py     Admin: users, models, server, people & memory, console
-  qcm.py            the card of a QCM Clara asks, and the message of its answers
-  mathview.py       text with formulas: Markdown to HTML, and the web view that typesets it with KaTeX
-  settings_dialog.py  server / token / identity, with a connection test
-  documents.py      reading attached files (PDF with pypdf, code and text), putting them in the message,
-                    and taking them out of a message shown again
-  api.py            the Clara server over HTTP (Qt-free, blocking)
-  workers.py        threads: one reply, the reminder / notification / server-state stream, reading
-                    documents, a connection test, any other call to the server
-  status.py, config.py, autostart.py, single.py, tray.py, icon.py   the state words, %APPDATA%\clara-app\config.json,
-                    the "Start with Windows" value, one copy per user, the notification-area icon
-  fonts/, clara.png, clara.ico   Hanken Grotesk and Epilogue (static copies of the site's), Clara's portrait
-tests/              Qt runs offscreen, against a small fake Clara server
-```
+The logic is tested (`cargo test --workspace`: a fake server speaks the real protocol). The windows, tray and
+notifications need a person at a Windows desktop; after a change to `src-tauri/`:
 
-## Development
-
-```powershell
-.venv\Scripts\python -m pytest
-```
+1. First start: the settings page asks to sign in; after signing in the site opens **without** asking for the password.
+2. Close the window: the icon stays. Click the icon: the window comes back. Quit from the menu: the icon goes.
+3. Start the app twice: the second start brings the first window forward.
+4. Stop the server: a notification says so and the icon turns grey; start it: it says so and the icon is coloured again.
+5. Add a folder in the settings, ask Clara to list it in a chat: she answers; ask her to write a file: you are asked first.
+6. Ask Clara for a reminder in one minute: a notification arrives with the window hidden.
+7. Click a link to another site in a conversation: it opens in the browser and the window stays on Clara.
+8. *Start with Windows*, restart the PC: the icon is there and the window is not.

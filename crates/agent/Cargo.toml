@@ -1,0 +1,27 @@
+[package]
+name = "clara-agent"
+description = "What the Clara desktop app does on this computer: sign in, listen to the server, work in the folders it was given"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+# TLS for https:// servers (Tailscale, a proxy). Off, only plain http: enough for tests, and it builds without a C toolchain.
+default = ["tls"]
+tls = ["attohttpc/tls-native"]
+
+[dependencies]
+attohttpc = { version = "0.31", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+encoding_rs = "0.8"
+pdf-extract = "0.9"
+gethostname = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tiny_http = "0.12"
+tempfile = "3"
